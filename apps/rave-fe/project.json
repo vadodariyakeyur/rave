@@ -24,7 +24,8 @@
       "executor": "@nrwl/vite:dev-server",
       "defaultConfiguration": "development",
       "options": {
-        "buildTarget": "rave-fe:build"
+        "buildTarget": "rave-fe:build",
+        "proxyConfig": "apps/rave-fe/proxy.conf.json"
       },
       "configurations": {
         "development": {
