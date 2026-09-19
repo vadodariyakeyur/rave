@@ -10,6 +10,15 @@ import { Distributor, Receiver } from '@/lib/distribute';
 import type { Peer } from '@rave/protocol';
 import type { Transfer } from '@/lib/transfer';
 import { ClockProbe, serveClock, type Estimate } from '@/lib/clock';
+import {
+  broadcastCue,
+  listenForCues,
+  Player,
+  START_LEAD_MS,
+  type Cue,
+  type PlayerState,
+} from '@/lib/player';
+import { keepAwake, onHidden } from '@/lib/wake';
 import { DebugOverlay } from '@/components/DebugOverlay';
 import { Button } from '@/components/ui/button';
 import { ForceStartDialog } from '@/components/ForceStartDialog';
@@ -240,6 +249,78 @@ export function RoomClient() {
     };
   }, [mesh, isCreator, creatorId, ended]);
 
+  // Playback. One Player per device, driven by cues on the creator's clock —
+  // including on the creator itself, which is simply the peer whose offset is
+  // zero. Two paths here would be two chances to schedule differently.
+  const audioContext = session?.audioContext;
+  const buffer = session?.buffer;
+  const playerRef = useRef<Player | undefined>(undefined);
+  const [playback, setPlayback] = useState<PlayerState>({
+    playing: false,
+    positionSeconds: 0,
+  });
+  useEffect(() => {
+    if (!audioContext || !buffer) return;
+    const player = new Player({ sink: audioContext, buffer });
+    playerRef.current = player;
+    const unsubscribe = player.subscribe(() => setPlayback(player.state()));
+    return () => {
+      unsubscribe();
+      player.close();
+      playerRef.current = undefined;
+    };
+  }, [audioContext, buffer]);
+
+  // The measured offset, read at cue time rather than depended on: it
+  // re-measures every few seconds, and restarting this effect on each round
+  // would tear down the listener mid-track.
+  const offsetRef = useRef(0);
+  useEffect(() => {
+    if (estimate?.offsetMs !== undefined) offsetRef.current = estimate.offsetMs;
+  }, [estimate]);
+
+  // A joiner listens; the creator has nobody to listen to.
+  useEffect(() => {
+    if (!mesh || ended || isCreator || !creatorId) return;
+    return listenForCues(mesh, creatorId, (cue) =>
+      playerRef.current?.apply(cue, offsetRef.current),
+    );
+  }, [mesh, isCreator, creatorId, ended]);
+
+  // The first cue fires when the server confirms the lock, not when the
+  // button is tapped: the lock is what settles who is actually in the room,
+  // and a cue sent a moment earlier would name peers about to be excluded.
+  //
+  // Once only. The roster changes after the lock too — an excluded peer
+  // leaving is a roster change — and recueing then would restart the track
+  // from the top for everyone still listening.
+  const locked = session?.state.locked ?? false;
+  const started = useRef(false);
+  useEffect(() => {
+    if (!isCreator || !locked || !mesh || started.current) return;
+    if (!playerRef.current) return;
+    started.current = true;
+    const at = performance.now() + START_LEAD_MS;
+    const cue: Cue = { type: 'play', startAt: at, fromSeconds: 0 };
+    broadcastCue(mesh, peers?.filter((p) => p.peerId !== selfPeerId).map((p) => p.peerId) ?? [], cue);
+    // Offset zero: the creator is the clock everyone else measured against.
+    playerRef.current.apply(cue, 0);
+  }, [isCreator, locked, mesh, peers, selfPeerId]);
+
+  // The creator keeps the room alive by staying visible. Neither of these
+  // prevents a backgrounded tab — they make it visible and less likely.
+  useEffect(() => {
+    if (!isCreator || ended) return;
+    const release = keepAwake();
+    const stop = onHidden(() =>
+      toast.warning('Keep this tab open — this device is the clock for the room.'),
+    );
+    return () => {
+      release();
+      stop();
+    };
+  }, [isCreator, ended]);
+
   // No session means a refresh or a pasted link — the tap that arms audio has
   // not happened, so this is where it happens.
   const code = params?.code?.toUpperCase();
@@ -255,6 +336,35 @@ export function RoomClient() {
   // wait, and the whole point of the dialog is that they recognise the device.
   const notReady = state.peers.filter((p) => !p.ready);
   const start = (force: boolean) => session.signaling.send({ type: 'start-playback', force });
+
+  /**
+   * Cue every peer, and ourselves, off one instant on our own clock.
+   *
+   * The creator is the reference, so the instant it sends is already in the
+   * clock every peer measured itself against — no conversion here, all of it
+   * on the receiving side.
+   */
+  const cue = (make: (at: number) => Cue) => {
+    const at = performance.now() + START_LEAD_MS;
+    const message = make(at);
+    if (mesh) {
+      broadcastCue(
+        mesh,
+        state.peers.filter((p) => p.peerId !== session.peerId).map((p) => p.peerId),
+        message,
+      );
+    }
+    playerRef.current?.apply(message, 0);
+  };
+
+  const play = () =>
+    cue((at) => ({
+      type: 'play',
+      startAt: at,
+      // Zero on a first play; where we paused on a resume.
+      fromSeconds: playerRef.current?.position() ?? 0,
+    }));
+  const pause = () => cue((at) => ({ type: 'pause', pauseAt: at }));
 
   return (
     <main className="mx-auto flex min-h-dvh max-w-md flex-col gap-8 p-8">
@@ -301,13 +411,17 @@ export function RoomClient() {
               <Button
                 type="button"
                 // Alone in the room there is nobody to play to; with someone
-                // stuck the button still works, it just asks first. Once
-                // locked the room has started and a second tap is a no-op the
-                // server swallows — the button should say so, not pretend.
-                disabled={state.peers.length < 2 || state.locked}
-                onClick={() => (everyoneReady ? start(false) : setConfirming(notReady))}
+                // stuck the button still works, it just asks first. Once the
+                // room is locked the same button runs the track — the server
+                // has already had its say, and the rest is cues on the wire.
+                disabled={state.peers.length < 2}
+                onClick={() => {
+                  if (state.locked) return playback.playing ? pause() : play();
+                  if (everyoneReady) return start(false);
+                  setConfirming(notReady);
+                }}
               >
-                Play
+                {!state.locked ? 'Play' : playback.playing ? 'Pause' : 'Resume'}
               </Button>
               {state.locked ? (
                 <p className="text-xs text-[var(--color-muted-foreground)]">
