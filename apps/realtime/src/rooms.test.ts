@@ -86,7 +86,10 @@ describe('RoomRegistry', () => {
       displayName: 'Keyur',
       durationSeconds: 100,
     });
-    reg.removePeer(room.peers[0]!.peerId);
+    const result = reg.removePeer(room.peers[0]!.peerId);
+    // The reason is what the survivors are told, so it has to name the
+    // creator leaving rather than the room merely emptying.
+    assert.deepEqual(result, { kind: 'closed', code: room.code, reason: 'creator-left' });
     assert.equal(reg.get(room.code), undefined);
   });
 
@@ -145,9 +148,11 @@ describe('RoomRegistry', () => {
     const joined = reg.join(room.code, 'Sam');
     assert.ok(joined.ok);
 
-    const survivor = reg.removePeer(joined.peerId);
-    assert.equal(survivor?.code, room.code);
-    assert.equal(survivor?.peers.length, 1);
+    const result = reg.removePeer(joined.peerId);
+    assert.equal(result.kind, 'open');
+    if (result.kind !== 'open') return;
+    assert.equal(result.room.code, room.code);
+    assert.equal(result.room.peers.length, 1);
     assert.equal(reg.get(room.code)?.peers.length, 1);
   });
 
@@ -157,11 +162,38 @@ describe('RoomRegistry', () => {
     const joined = reg.join(room.code, 'Sam');
     assert.ok(joined.ok);
 
-    reg.removePeer(room.peers[0]!.peerId);
+    const result = reg.removePeer(room.peers[0]!.peerId);
+    // The reason is what the survivors are told, so it has to name the
+    // creator leaving rather than the room merely emptying.
+    assert.deepEqual(result, { kind: 'closed', code: room.code, reason: 'creator-left' });
     assert.equal(reg.get(room.code), undefined);
     // The joiner's reverse index must go too, or their later close event
     // would point at a room that no longer exists.
     assert.equal(reg.roomForPeer(joined.peerId), undefined);
     assert.equal(reg.size, 0);
+  });
+
+  it('reports an empty room as empty, not as the creator leaving', () => {
+    const reg = new RoomRegistry();
+    const room = reg.create({ roomName: 'Kitchen', displayName: 'Keyur', durationSeconds: 100 });
+    const joined = reg.join(room.code, 'Sam');
+    assert.ok(joined.ok);
+
+    // Creator first, then the last joiner: the second removal empties a room
+    // that already has no creator in it.
+    reg.removePeer(room.peers[0]!.peerId);
+    const result = reg.removePeer(joined.peerId);
+    assert.equal(result.kind, 'unknown');
+  });
+
+  it('closes an emptied room when its last peer leaves', () => {
+    const reg = new RoomRegistry();
+    const room = reg.create({ roomName: 'Kitchen', displayName: 'Keyur', durationSeconds: 100 });
+    // A creator-less room cannot arise through join(), so build the state
+    // directly: this is the branch that must not say 'creator-left'.
+    room.peers = room.peers.map((p) => ({ ...p, isCreator: false }));
+
+    const result = reg.removePeer(room.peers[0]!.peerId);
+    assert.deepEqual(result, { kind: 'closed', code: room.code, reason: 'room-empty' });
   });
 });

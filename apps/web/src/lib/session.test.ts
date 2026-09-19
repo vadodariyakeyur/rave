@@ -220,4 +220,13 @@ describe('joinRoom', () => {
     assert.equal(getSession(), undefined);
     assert.equal(contexts[0]!.closed, true);
   });
+  it('refuses a malformed code without opening a socket or a context', async () => {
+    // A code the schema rejects cannot reach the server at all, so the
+    // person must get the room-not-found wording, not a parse failure.
+    await assert.rejects(joinRoom({ code: 'ABC', displayName: 'Sam' }), /No room with that code/);
+    assert.equal(sockets.length, 0);
+    assert.equal(contexts.length, 0);
+    assert.equal(getSession(), undefined);
+  });
+
 });

@@ -2,7 +2,9 @@ import { randomUUID, randomInt } from 'node:crypto';
 import {
   ROOM_CODE_ALPHABET,
   ROOM_CODE_LENGTH,
+  type ErrorMessage,
   type Peer,
+  type RoomClosed,
   type RoomState,
 } from '@rave/protocol';
 
@@ -30,7 +32,13 @@ export interface Room {
  */
 export type JoinResult =
   | { ok: true; room: Room; peerId: string }
-  | { ok: false; reason: 'room-not-found' | 'room-locked' };
+  | { ok: false; reason: Extract<ErrorMessage['code'], 'room-not-found' | 'room-locked'> };
+
+/** What became of the room after a peer left. */
+export type RemoveResult =
+  | { kind: 'open'; room: Room }
+  | { kind: 'closed'; code: string; reason: RoomClosed['reason'] }
+  | { kind: 'unknown' };
 
 export interface CreateRoomInput {
   roomName: string;
@@ -112,11 +120,15 @@ export class RoomRegistry {
   /**
    * Remove a peer. If they were the creator the whole room goes with them:
    * the creator is the clock master, so the room cannot play without one.
+   *
+   * Why a tagged result: 'gone' has two causes, and the survivors are told
+   * which one. Collapsing them into a bare undefined is what made the server
+   * blame the host for a room that simply emptied.
    */
-  removePeer(peerId: string): Room | undefined {
+  removePeer(peerId: string): RemoveResult {
     const room = this.roomForPeer(peerId);
     this.#roomCodeByPeer.delete(peerId);
-    if (!room) return undefined;
+    if (!room) return { kind: 'unknown' };
 
     const peer = room.peers.find((p) => p.peerId === peerId);
     room.peers = room.peers.filter((p) => p.peerId !== peerId);
@@ -124,9 +136,9 @@ export class RoomRegistry {
     if (peer?.isCreator || room.peers.length === 0) {
       for (const p of room.peers) this.#roomCodeByPeer.delete(p.peerId);
       this.#byCode.delete(room.code);
-      return undefined;
+      return { kind: 'closed', code: room.code, reason: peer?.isCreator ? 'creator-left' : 'room-empty' };
     }
-    return room;
+    return { kind: 'open', room };
   }
 
   /** The room as clients see it. */

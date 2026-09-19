@@ -1,6 +1,6 @@
 'use client';
 
-import type { RoomState } from '@rave/protocol';
+import { RoomCode, type RoomClosed, type RoomState } from '@rave/protocol';
 import { armAudio, decodeFile, type DecodedTrack } from './audio';
 import { Signaling } from './signaling';
 
@@ -26,8 +26,12 @@ export interface Session {
   peerId: string;
   code: string;
   state: RoomState;
-  /** Set when the creator leaves: the room is over and will not come back. */
-  closed?: boolean;
+  /**
+   * Why the room ended, if it has. 'lost-connection' is our own socket
+   * dropping, which is not the same event as the room closing — telling
+   * someone the host left when their wifi died is a lie they will act on.
+   */
+  ended?: RoomClosed['reason'] | 'lost-connection';
 }
 
 let current: Session | undefined;
@@ -127,6 +131,9 @@ export async function createRoom(input: {
   });
 }
 
+/** One wording for a code that leads nowhere, whatever the reason. */
+export const UNKNOWN_ROOM = 'No room with that code. Check it and try again.';
+
 /**
  * Arm audio, then join. Same ordering rule as createRoom and the same reason:
  * the AudioContext must be constructed inside the caller's gesture, so this
@@ -134,6 +141,11 @@ export async function createRoom(input: {
  * decode yet — the transfer arrives in #5.
  */
 export async function joinRoom(input: { code: string; displayName: string }): Promise<Session> {
+  // A malformed code cannot parse server-side, so without this the person
+  // gets "message could not be understood" for what is really a bad link.
+  const parsed = RoomCode.safeParse(input.code);
+  if (!parsed.success) throw new Error(UNKNOWN_ROOM);
+
   const audioContext = new AudioContext();
   try {
     await armAudio(audioContext);
@@ -181,6 +193,6 @@ export async function joinRoom(input: { code: string; displayName: string }): Pr
       unsubscribeMessage();
     }
 
-    signaling.send({ type: 'join-room', code: input.code, displayName: input.displayName });
+    signaling.send({ type: 'join-room', code: parsed.data, displayName: input.displayName });
   });
 }

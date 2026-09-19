@@ -183,6 +183,13 @@ describe('server room messages', () => {
     assert.equal(msg?.type === 'room-closed' && msg.reason, 'creator-left');
   });
 
+  it('parses room-closed for a room that simply emptied', () => {
+    const msg = parseServerMessage(
+      JSON.stringify({ type: 'room-closed', code: 'ABC234', reason: 'room-empty' }),
+    );
+    assert.equal(msg?.type === 'room-closed' && msg.reason, 'room-empty');
+  });
+
   it('rejects room-closed with an unknown reason', () => {
     assert.equal(
       parseServerMessage(JSON.stringify({ type: 'room-closed', code: 'ABC234', reason: 'bored' })),

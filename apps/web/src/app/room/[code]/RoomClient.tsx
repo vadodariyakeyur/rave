@@ -2,7 +2,7 @@
 
 import { useEffect, useSyncExternalStore } from 'react';
 import { useParams } from 'next/navigation';
-import { getSession, patchSession, subscribeSession } from '@/lib/session';
+import { getSession, patchSession, subscribeSession, type Session } from '@/lib/session';
 import { Roster } from '@/components/Roster';
 import { PreJoin } from './PreJoin';
 
@@ -17,11 +17,12 @@ export function RoomClient() {
     if (!signaling) return;
     const unsubscribeMessage = signaling.onMessage((msg) => {
       if (msg.type === 'room-state') patchSession({ state: msg });
-      if (msg.type === 'room-closed') patchSession({ closed: true });
+      if (msg.type === 'room-closed') patchSession({ ended: msg.reason });
     });
-    // A dropped socket leaves the roster frozen and looking live. Reuse the
-    // closed banner: from here the room is over either way.
-    const unsubscribeClose = signaling.onClose(() => patchSession({ closed: true }));
+    // A dropped socket leaves the roster frozen and looking live — but it is
+    // our socket, not the room. Saying the host left would send someone off
+    // to blame a person when the fix is their own wifi.
+    const unsubscribeClose = signaling.onClose(() => patchSession({ ended: 'lost-connection' }));
     return () => {
       unsubscribeMessage();
       unsubscribeClose();
@@ -47,24 +48,32 @@ export function RoomClient() {
         )}
       </header>
 
-      {session.closed && (
+      {session.ended ? (
+        // The roster behind this has no socket keeping it true, so it goes
+        // rather than sitting there looking live next to the bad news.
         <p
           role="alert"
           className="rounded-md border border-[var(--color-destructive)] p-3 text-sm text-[var(--color-destructive)]"
         >
-          This room has ended. The person who created it left.
+          {ENDED_MESSAGE[session.ended]}
         </p>
+      ) : (
+        <section className="flex flex-col gap-3">
+          <h2 className="text-sm font-medium text-[var(--color-muted-foreground)]">
+            In the room
+          </h2>
+          <Roster peers={state.peers} selfPeerId={session.peerId} />
+        </section>
       )}
-
-      <section className="flex flex-col gap-3">
-        <h2 className="text-sm font-medium text-[var(--color-muted-foreground)]">
-          In the room
-        </h2>
-        <Roster peers={state.peers} selfPeerId={session.peerId} />
-      </section>
     </main>
   );
 }
+
+const ENDED_MESSAGE: Record<NonNullable<Session['ended']>, string> = {
+  'creator-left': 'This room has ended. The person who created it left.',
+  'room-empty': 'This room has ended. Everyone else left.',
+  'lost-connection': 'Lost the connection to this room. Check the network and rejoin.',
+};
 
 function formatDuration(seconds: number): string {
   const whole = Math.round(seconds);

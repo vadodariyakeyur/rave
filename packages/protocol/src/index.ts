@@ -130,7 +130,7 @@ export type RoomJoined = z.infer<typeof RoomJoined>;
 export const RoomClosed = z.object({
   type: z.literal('room-closed'),
   code: RoomCode,
-  reason: z.enum(['creator-left']),
+  reason: z.enum(['creator-left', 'room-empty']),
 });
 export type RoomClosed = z.infer<typeof RoomClosed>;
 

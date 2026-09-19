@@ -157,20 +157,20 @@ wss.on('connection', (socket) => {
     // Captured before removal: if this was the creator the room is deleted,
     // and the survivors still have to be told why their roster stopped.
     const others = room.peers.filter((p) => p.peerId !== peerId).map((p) => p.peerId);
-    const code = room.code;
 
-    const survivor = rooms.removePeer(peerId);
-    if (survivor) {
-      broadcast(others, rooms.toState(survivor));
-      log('peer left', { code, rooms: rooms.size });
+    const result = rooms.removePeer(peerId);
+    if (result.kind === 'open') {
+      broadcast(others, rooms.toState(result.room));
+      log('peer left', { code: result.room.code, rooms: rooms.size });
       return;
     }
+    if (result.kind === 'unknown') return;
 
-    // No survivor means the room is gone. A frozen roster would look like a
-    // slow network; this says it is over.
-    broadcast(others, { type: 'room-closed', code, reason: 'creator-left' });
+    // The room is gone. A frozen roster would look like a slow network; this
+    // says it is over, and which of the two ways it ended.
+    broadcast(others, { type: 'room-closed', code: result.code, reason: result.reason });
     for (const id of others) socketByPeer.delete(id);
-    log('room closed', { code, rooms: rooms.size });
+    log('room closed', { code: result.code, reason: result.reason, rooms: rooms.size });
   });
 });
 
