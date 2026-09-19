@@ -358,11 +358,40 @@ export function RoomClient() {
     if (estimate?.offsetMs !== undefined) offsetRef.current = estimate.offsetMs;
   }, [estimate]);
 
-  // A joiner listens; the creator has nobody to listen to.
+  /**
+   * The last cue heard, held until there is a player to give it to.
+   *
+   * The creator's cue is one fire-and-forget send with no replay, and the
+   * joiner is not necessarily ready for it: `ready` goes to the server on
+   * the same tick that asks React for the render that creates the player,
+   * so the creator can be told this peer is ready and cue them a moment
+   * before `player` exists. Dropping that cue is silence for the rest of
+   * the track.
+   */
+  const pendingCue = useRef<Cue | undefined>(undefined);
+
+  // A joiner listens; the creator has nobody to listen to. Attached as soon
+  // as the channel exists rather than waiting for the player, because the
+  // cue that arrives in between is the one that starts the track.
   useEffect(() => {
     if (!mesh || ended || isCreator || !creatorId) return;
-    return listenForCues(mesh, creatorId, (cue) => player?.apply(cue, offsetRef.current));
+    return listenForCues(mesh, creatorId, (cue) => {
+      pendingCue.current = cue;
+      player?.apply(cue, offsetRef.current);
+    });
   }, [mesh, isCreator, creatorId, ended, player]);
+
+  // Whatever was missed while the track was decoding. `#play` already starts
+  // a cue whose instant has passed from where the track would be by now, so
+  // a peer that finished late joins mid-track in sync rather than from the
+  // top, alone.
+  useEffect(() => {
+    if (!player || isCreator) return;
+    const cue = pendingCue.current;
+    if (!cue) return;
+    pendingCue.current = undefined;
+    player.apply(cue, offsetRef.current);
+  }, [player, isCreator]);
 
   // The first cue fires when the server confirms the lock, not when the
   // button is tapped: the lock is what settles who is actually in the room,
