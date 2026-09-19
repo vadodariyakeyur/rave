@@ -1,0 +1,7 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: realtime
+    static_configs:
+      - targets: ["realtime:8080"]

@@ -1,0 +1,26 @@
+# Phase 1 is same-wifi, so Caddy issues certs from its own internal CA.
+# Let's Encrypt cannot validate a LAN-only host; phase 2 with a real domain
+# swaps `tls internal` for automatic HTTPS and removes the device trust step.
+#
+# Peers reach everything same-origin through here: no mixed content, and
+# WebRTC gets the secure context it requires.
+
+{
+	auto_https disable_redirects
+}
+
+https://{$RAVE_HOST:localhost}, https://localhost, https://127.0.0.1 {
+	tls internal
+
+	handle /ws* {
+		reverse_proxy realtime:8080
+	}
+
+	handle /healthz {
+		reverse_proxy realtime:8080
+	}
+
+	handle {
+		reverse_proxy web:3000
+	}
+}

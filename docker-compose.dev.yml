@@ -1,0 +1,30 @@
+# Dev overlay: source-mounted, hot reload. `caddy_data` is a named volume in
+# both stacks, so the internal CA survives restarts and devices trust it once.
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      target: build
+    command: sh -c "pnpm --filter @rave/protocol build && pnpm --filter @rave/web dev"
+    environment:
+      NODE_ENV: development
+      WATCHPACK_POLLING: "true"
+    volumes:
+      - ./apps/web/src:/repo/apps/web/src
+      - ./apps/web/public:/repo/apps/web/public
+      - ./packages/protocol/src:/repo/packages/protocol/src
+
+  realtime:
+    build:
+      context: .
+      dockerfile: apps/realtime/Dockerfile
+      target: build
+    command: sh -c "pnpm --filter @rave/protocol build && pnpm --filter @rave/realtime dev"
+    environment:
+      NODE_ENV: development
+      PORT: 8080
+    volumes:
+      - ./apps/realtime/src:/repo/apps/realtime/src
+      - ./packages/protocol/src:/repo/packages/protocol/src
