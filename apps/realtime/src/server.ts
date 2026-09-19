@@ -4,7 +4,7 @@ import {
   parseClientMessage,
   type ServerMessage,
 } from '@rave/protocol';
-import { RoomRegistry } from './rooms.ts';
+import { RoomRegistry, type StartResult } from './rooms.ts';
 import { iceServers } from './ice.ts';
 
 /**
@@ -16,6 +16,13 @@ import { iceServers } from './ice.ts';
  */
 
 export const rooms = new RoomRegistry();
+
+/** Keyed off the refusal so a new reason cannot ship without its wording. */
+const START_REFUSAL: Record<Extract<StartResult, { ok: false }>['reason'], string> = {
+  'peers-not-ready': 'Some peers are still downloading. Start anyway to leave them behind.',
+  'not-creator': 'Only the creator can start this room.',
+  'invalid-request': 'This connection does not belong to a room.',
+};
 
 export function log(msg: string, fields: Record<string, unknown> = {}): void {
   console.log(JSON.stringify({ msg, ...fields, at: new Date().toISOString() }));
@@ -156,6 +163,45 @@ export function handleConnection(socket: WebSocket): void {
           rooms.toState(room),
         );
         log('peer ready', { code: room.code, ready: room.peers.filter((p) => p.ready).length });
+        return;
+      }
+
+      case 'start-playback': {
+        const result = peerId === undefined
+          ? ({ ok: false, reason: 'invalid-request' } as const)
+          : rooms.start(peerId, msg.force);
+        if (!result.ok) {
+          send(socket, {
+            type: 'error',
+            code: result.reason,
+            message: START_REFUSAL[result.reason],
+          });
+          return;
+        }
+
+        // The excluded first, while their sockets are still mapped. They are
+        // out of the roster already, so the broadcast below cannot reach them.
+        for (const peer of result.excluded) {
+          const excludedSocket = socketByPeer.get(peer.peerId);
+          if (excludedSocket) {
+            send(excludedSocket, { type: 'room-closed', code: result.room.code, reason: 'excluded' });
+            // Nothing will ever be said down this socket again, and the room
+            // is already gone from under them. Leaving it open holds a socket
+            // per excluded peer until they happen to close the tab.
+            excludedSocket.close();
+          }
+          socketByPeer.delete(peer.peerId);
+        }
+
+        broadcast(
+          result.room.peers.map((p) => p.peerId),
+          rooms.toState(result.room),
+        );
+        log('room started', {
+          code: result.room.code,
+          peers: result.room.peers.length,
+          excluded: result.excluded.length,
+        });
         return;
       }
 

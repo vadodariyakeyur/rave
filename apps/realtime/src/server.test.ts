@@ -34,6 +34,14 @@ class FakeSocket {
     }
   }
 
+  /** The server hanging up on us, as opposed to us hanging up on it. */
+  close(): void {
+    this.closed = true;
+    this.hangUp();
+  }
+
+  closed = false;
+
   hangUp(): void {
     this.readyState = 3;
     for (const h of this.#listeners.get('close') ?? []) (h as () => void)();
@@ -132,5 +140,77 @@ describe('ready', () => {
     const stray = connect();
     stray.receive({ type: 'ready' });
     assert.equal(stray.sent.some((m) => m.type === 'room-state'), false);
+  });
+});
+
+describe('start-playback', () => {
+  /** A host and two joiners, so one can be left behind while another is not. */
+  function trio() {
+    const { host, guest, code, hostId } = pair();
+    const other = connect();
+    other.receive({ type: 'join-room', code, displayName: 'Ada' });
+    return { host, guest, other, code, hostId, otherId: other.last('room-joined').peerId };
+  }
+
+  it('refuses without force while someone is still downloading', () => {
+    const { host } = trio();
+    host.receive({ type: 'start-playback', force: false });
+    assert.equal(host.last('error').code, 'peers-not-ready');
+  });
+
+  it('locks the room and tells everyone once all are ready', () => {
+    const { host, guest, other } = trio();
+    guest.receive({ type: 'ready' });
+    other.receive({ type: 'ready' });
+
+    host.receive({ type: 'start-playback', force: false });
+
+    assert.equal(host.last('room-state').locked, true);
+    assert.equal(guest.last('room-state').locked, true);
+    assert.equal(other.last('room-state').locked, true);
+  });
+
+  it('tells an excluded peer the room is over for them, and nobody else', () => {
+    const { host, guest, other, otherId } = trio();
+    guest.receive({ type: 'ready' });
+
+    host.receive({ type: 'start-playback', force: true });
+
+    assert.equal(other.last('room-closed').reason, 'excluded');
+    // And then hung up on: nothing more will ever be said down that socket,
+    // so holding it open just leaks one per excluded peer.
+    assert.equal(other.closed, true);
+    // The survivors must not see a room-closed of any kind: theirs is playing.
+    assert.equal(host.sent.filter((m) => m.type === 'room-closed').length, 0);
+    assert.equal(guest.sent.filter((m) => m.type === 'room-closed').length, 0);
+    assert.equal(guest.last('room-state').peers.some((p) => p.peerId === otherId), false);
+  });
+
+  it('refuses a late join with the locked message', () => {
+    const { host, guest } = trio();
+    guest.receive({ type: 'ready' });
+    host.receive({ type: 'start-playback', force: true });
+
+    const late = connect();
+    late.receive({ type: 'join-room', code: host.last('room-created').code, displayName: 'Late' });
+    assert.equal(late.last('error').code, 'room-locked');
+  });
+
+  it('refuses a start from a peer who is not the creator', () => {
+    const { guest } = trio();
+    guest.receive({ type: 'start-playback', force: true });
+    assert.equal(guest.last('error').code, 'not-creator');
+  });
+
+  it('survives an excluded peer hanging up afterwards', () => {
+    // Their socket is still open and still thinks it belongs to a peer id.
+    // The close handler must not then mutate a room they left.
+    const { host, guest, other } = trio();
+    guest.receive({ type: 'ready' });
+    host.receive({ type: 'start-playback', force: true });
+
+    const before = guest.sent.length;
+    assert.doesNotThrow(() => other.hangUp());
+    assert.equal(guest.sent.length, before, 'the survivors hear nothing about it');
   });
 });

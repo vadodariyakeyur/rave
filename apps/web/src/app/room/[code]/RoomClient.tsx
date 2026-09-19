@@ -2,14 +2,17 @@
 
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
+import { toast } from 'sonner';
 import { getSession, patchSession, subscribeSession, type Session } from '@/lib/session';
 import { Roster } from '@/components/Roster';
 import { Mesh, type PeerConnectionState } from '@/lib/mesh';
 import { Distributor, Receiver } from '@/lib/distribute';
+import type { Peer } from '@rave/protocol';
 import type { Transfer } from '@/lib/transfer';
 import { ClockProbe, serveClock, type Estimate } from '@/lib/clock';
 import { DebugOverlay } from '@/components/DebugOverlay';
 import { Button } from '@/components/ui/button';
+import { ForceStartDialog } from '@/components/ForceStartDialog';
 import { PreJoin } from './PreJoin';
 
 export function RoomClient() {
@@ -31,7 +34,12 @@ export function RoomClient() {
     // A dropped socket leaves the roster frozen and looking live — but it is
     // our socket, not the room. Saying the host left would send someone off
     // to blame a person when the fix is their own wifi.
-    const unsubscribeClose = signaling.onClose(() => patchSession({ ended: 'lost-connection' }));
+    const unsubscribeClose = signaling.onClose(() => {
+      // The same sentence the panel shows, read from the same place: two
+      // copies of this drift the moment one of them is reworded.
+      toast.error(ENDED_MESSAGE['lost-connection']);
+      patchSession({ ended: 'lost-connection' });
+    });
     return () => {
       unsubscribeMessage();
       unsubscribeClose();
@@ -170,6 +178,47 @@ export function RoomClient() {
     };
   }, [mesh, isCreator, ended]);
 
+  // Who was here last render. A ref, not state: it exists to be diffed
+  // against, and writing it must not itself cause a render.
+  const knownPeers = useRef<ReadonlySet<string> | undefined>(undefined);
+  useEffect(() => {
+    if (!peers) return;
+    const now = new Set(peers.map((p) => p.peerId));
+    const before = knownPeers.current;
+    knownPeers.current = now;
+    // The first roster is everyone already here, including ourselves. Nobody
+    // "joined" — announcing four arrivals on entry is noise, not news.
+    if (!before) return;
+    for (const peer of peers) {
+      if (!before.has(peer.peerId)) toast(`${peer.displayName} joined`);
+    }
+  }, [peers]);
+
+  // Stalled is a transition, not a state: the roster already shows the badge
+  // for as long as it lasts, so a toast per render would be a stream of them.
+  const stalled = useRef<ReadonlySet<string>>(new Set());
+  useEffect(() => {
+    const now = new Set(
+      [...transfers].filter(([, t]) => t.state === 'stalled').map(([peerId]) => peerId),
+    );
+    for (const peerId of now) {
+      if (stalled.current.has(peerId)) continue;
+      // Both sides mark stalled, but a joiner's map holds only itself — being
+      // told "Ada has stopped downloading" when you are Ada is nonsense. The
+      // creator is the one who has to decide whether to wait.
+      if (peerId === selfPeerId) continue;
+      const name = peers?.find((p) => p.peerId === peerId)?.displayName ?? 'A peer';
+      toast.warning(`${name} has stopped downloading.`);
+    }
+    stalled.current = now;
+  }, [transfers, peers, selfPeerId]);
+
+  // The roster at the moment the dialog opened, not at the moment it renders.
+  // A peer going ready (or stalling) while the creator reads the dialog would
+  // otherwise rewrite the list under them — and the dangerous direction is
+  // silent: a peer who stalls after it opens is never named, then dropped.
+  const [confirming, setConfirming] = useState<readonly Peer[] | undefined>(undefined);
+
   const [estimate, setEstimate] = useState<Estimate | undefined>(undefined);
   useEffect(() => {
     if (!mesh || ended || isCreator || !creatorId) return;
@@ -202,6 +251,10 @@ export function RoomClient() {
   // is not "everyone ready" — every() says true for nobody, and a creator
   // alone would get a lit button with no one to play to.
   const everyoneReady = state.peers.length > 1 && state.peers.every((p) => p.ready);
+  // Named, not counted: "2 peers" tells the creator nothing about whether to
+  // wait, and the whole point of the dialog is that they recognise the device.
+  const notReady = state.peers.filter((p) => !p.ready);
+  const start = (force: boolean) => session.signaling.send({ type: 'start-playback', force });
 
   return (
     <main className="mx-auto flex min-h-dvh max-w-md flex-col gap-8 p-8">
@@ -247,17 +300,35 @@ export function RoomClient() {
             <>
               <Button
                 type="button"
-                disabled={!everyoneReady}
-                // #6 schedules the actual start; the barrier is what #5 owes it.
-                onClick={() => undefined}
+                // Alone in the room there is nobody to play to; with someone
+                // stuck the button still works, it just asks first. Once
+                // locked the room has started and a second tap is a no-op the
+                // server swallows — the button should say so, not pretend.
+                disabled={state.peers.length < 2 || state.locked}
+                onClick={() => (everyoneReady ? start(false) : setConfirming(notReady))}
               >
                 Play
               </Button>
-              {!everyoneReady && (
+              {state.locked ? (
                 <p className="text-xs text-[var(--color-muted-foreground)]">
-                  Waiting for everyone to finish downloading.
+                  Started. The room is closed to new joins.
                 </p>
+              ) : (
+                !everyoneReady &&
+                state.peers.length > 1 && (
+                  <p className="text-xs text-[var(--color-muted-foreground)]">
+                    Waiting for everyone to finish downloading.
+                  </p>
+                )
               )}
+              <ForceStartDialog
+                notReady={confirming}
+                onCancel={() => setConfirming(undefined)}
+                onConfirm={() => {
+                  setConfirming(undefined);
+                  start(true);
+                }}
+              />
             </>
           )}
         </section>
@@ -270,6 +341,7 @@ const ENDED_MESSAGE: Record<NonNullable<Session['ended']>, string> = {
   'creator-left': 'This room has ended. The person who created it left.',
   'room-empty': 'This room has ended. Everyone else left.',
   'lost-connection': 'Lost the connection to this room. Check the network and rejoin.',
+  excluded: 'The room started without you. Your download had not finished in time.',
 };
 
 function formatDuration(seconds: number): string {

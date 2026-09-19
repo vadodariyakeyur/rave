@@ -217,3 +217,89 @@ describe('setReady', () => {
     assert.equal(reg.setReady('11111111-1111-4111-8111-111111111111'), undefined);
   });
 });
+
+describe('start', () => {
+  /** A room with a creator and two joiners, none of them ready yet. */
+  function room() {
+    const reg = new RoomRegistry();
+    const created = reg.create({ roomName: 'Kitchen', displayName: 'Keyur', durationSeconds: 100 });
+    const ada = reg.join(created.code, 'Ada');
+    const sam = reg.join(created.code, 'Sam');
+    assert.ok(ada.ok && sam.ok);
+    return { reg, created, ada: ada.peerId, sam: sam.peerId };
+  }
+
+  it('locks the room and keeps everyone when all are ready', () => {
+    const { reg, created, ada, sam } = room();
+    reg.setReady(ada);
+    reg.setReady(sam);
+
+    const result = reg.start(created.peers[0]!.peerId, false);
+    assert.ok(result.ok);
+    assert.deepEqual(result.excluded, []);
+    assert.equal(result.room.locked, true);
+    assert.equal(result.room.peers.length, 3);
+  });
+
+  it('refuses without force while someone is still downloading', () => {
+    const { reg, created, ada } = room();
+    reg.setReady(ada);
+
+    const result = reg.start(created.peers[0]!.peerId, false);
+    assert.deepEqual(result, { ok: false, reason: 'peers-not-ready' });
+    // The refusal must not have half-started the room: a later join has to
+    // still work, or a creator who cancelled the dialog has a dead room.
+    assert.equal(created.locked, false);
+    assert.ok(reg.join(created.code, 'Late').ok);
+  });
+
+  it('drops the not-ready peers on a forced start and names them', () => {
+    const { reg, created, ada, sam } = room();
+    reg.setReady(ada);
+
+    const result = reg.start(created.peers[0]!.peerId, true);
+    assert.ok(result.ok);
+    assert.deepEqual(result.excluded.map((p) => p.peerId), [sam]);
+    assert.deepEqual(result.room.peers.map((p) => p.peerId).sort(), [created.peers[0]!.peerId, ada].sort());
+    // Out of the reverse index too, or their disconnect would later mutate
+    // a room they are no longer in.
+    assert.equal(reg.roomForPeer(sam), undefined);
+  });
+
+  it('refuses a start from anyone but the creator', () => {
+    const { reg, ada } = room();
+    assert.deepEqual(reg.start(ada, true), { ok: false, reason: 'not-creator' });
+  });
+
+  it('refuses a start from a peer in no room', () => {
+    const reg = new RoomRegistry();
+    assert.deepEqual(reg.start('11111111-1111-4111-8111-111111111111', true), {
+      ok: false,
+      reason: 'invalid-request',
+    });
+  });
+
+  it('shrugs at a second start rather than excluding a late joiner', () => {
+    // Locked already means playing. A double-tap on Play must not re-run the
+    // exclusion — by then the roster is the survivors, and re-running it on
+    // a room where someone reconnected not-ready would drop them twice.
+    const { reg, created, ada, sam } = room();
+    reg.setReady(ada);
+    reg.start(created.peers[0]!.peerId, true);
+
+    const again = reg.start(created.peers[0]!.peerId, false);
+    assert.ok(again.ok, 'a second start is not an error');
+    assert.deepEqual(again.excluded, []);
+    assert.equal(again.room.peers.length, 2);
+    assert.equal(again.room.peers.some((p) => p.peerId === sam), false);
+  });
+
+  it('closes the room to joins once started', () => {
+    const { reg, created, ada, sam } = room();
+    reg.setReady(ada);
+    reg.setReady(sam);
+    reg.start(created.peers[0]!.peerId, false);
+
+    assert.deepEqual(reg.join(created.code, 'Late'), { ok: false, reason: 'room-locked' });
+  });
+});

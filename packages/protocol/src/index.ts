@@ -130,6 +130,23 @@ export const Ready = z
 export type Ready = z.infer<typeof Ready>;
 
 /**
+ * Client -> server. The creator says go.
+ *
+ * `force` is the answer to "someone is stuck": without it the server refuses
+ * unless every peer is ready, with it the not-ready peers are dropped from
+ * the room. It is explicit rather than inferred from the roster because a
+ * force-start is a decision a person makes at a dialog, and a server that
+ * guessed it would exclude someone on a roster that was merely a tick stale.
+ */
+export const StartPlayback = z
+  .object({
+    type: z.literal('start-playback'),
+    force: z.boolean(),
+  })
+  .strict();
+export type StartPlayback = z.infer<typeof StartPlayback>;
+
+/**
  * Client -> server, then server -> client, relayed to one named peer.
  *
  * The payload is opaque on purpose: it carries SDP and ICE candidates whose
@@ -186,26 +203,46 @@ export const RoomJoined = z.object({
 export type RoomJoined = z.infer<typeof RoomJoined>;
 
 /**
- * Server -> client. The room is gone and will not come back. Distinct from a
- * dropped socket, which might reconnect: this one is final, so the UI can say
- * what happened instead of leaving a roster frozen on screen.
+ * Server -> client. This room is over for the recipient and will not come
+ * back. Distinct from a dropped socket, which might reconnect: this one is
+ * final, so the UI can say what happened instead of leaving a roster frozen
+ * on screen.
+ *
+ * 'excluded' is the odd one out: the room is still playing, just not for
+ * them. Same message because the consequence is identical — there is nothing
+ * left on screen worth keeping live — and a separate one would be a second
+ * terminal path for the client to get wrong.
  */
 export const RoomClosed = z.object({
   type: z.literal('room-closed'),
   code: RoomCode,
-  reason: z.enum(['creator-left', 'room-empty']),
+  reason: z.enum(['creator-left', 'room-empty', 'excluded']),
 });
 export type RoomClosed = z.infer<typeof RoomClosed>;
 
 /** Server -> client. Something the person needs to see, in their words. */
 export const ErrorMessage = z.object({
   type: z.literal('error'),
-  code: z.enum(['room-not-found', 'room-locked', 'invalid-request', 'peer-not-found']),
+  code: z.enum([
+    'room-not-found',
+    'room-locked',
+    'invalid-request',
+    'peer-not-found',
+    'not-creator',
+    'peers-not-ready',
+  ]),
   message: z.string().min(1).max(200),
 });
 export type ErrorMessage = z.infer<typeof ErrorMessage>;
 
-export const ClientMessage = z.discriminatedUnion('type', [Ping, CreateRoom, JoinRoom, Signal, Ready]);
+export const ClientMessage = z.discriminatedUnion('type', [
+  Ping,
+  CreateRoom,
+  JoinRoom,
+  Signal,
+  Ready,
+  StartPlayback,
+]);
 export type ClientMessage = z.infer<typeof ClientMessage>;
 
 export const ServerMessage = z.discriminatedUnion('type', [

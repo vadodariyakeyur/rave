@@ -34,6 +34,20 @@ export type JoinResult =
   | { ok: true; room: Room; peerId: string }
   | { ok: false; reason: Extract<ErrorMessage['code'], 'room-not-found' | 'room-locked'> };
 
+/**
+ * Why a start was refused, or who it left behind.
+ *
+ * 'excluded' carries the peers dropped, not just their count: the server has
+ * to close their sockets and the survivors need a roster without them, and
+ * recomputing that list from a roster already mutated is not possible.
+ */
+export type StartResult =
+  | { ok: true; room: Room; excluded: Peer[] }
+  | {
+      ok: false;
+      reason: Extract<ErrorMessage['code'], 'peers-not-ready' | 'not-creator' | 'invalid-request'>;
+    };
+
 /** What became of the room after a peer left. */
 export type RemoveResult =
   | { kind: 'open'; room: Room }
@@ -128,6 +142,36 @@ export class RoomRegistry {
     if (!room || !peer) return undefined;
     peer.ready = true;
     return room;
+  }
+
+  /**
+   * Lock the room and, on a forced start, drop whoever is not ready.
+   *
+   * Locking here rather than in the caller is what makes it safe: the room
+   * is closed to joins in the same step that decides who is in it, so there
+   * is no window where someone joins between the check and the lock and is
+   * neither excluded nor ready.
+   *
+   * Starting an already-locked room is a no-op that still succeeds — a
+   * double-tap on Play is not an error anyone needs to see, and pause and
+   * resume in #8 run over a room that is already locked.
+   */
+  start(peerId: string, force: boolean): StartResult {
+    const room = this.roomForPeer(peerId);
+    const peer = room?.peers.find((p) => p.peerId === peerId);
+    if (!room || !peer) return { ok: false, reason: 'invalid-request' };
+    // Only the creator: they hold the file and the clock, so nobody else has
+    // anything to start.
+    if (!peer.isCreator) return { ok: false, reason: 'not-creator' };
+    if (room.locked) return { ok: true, room, excluded: [] };
+
+    const notReady = room.peers.filter((p) => !p.ready);
+    if (notReady.length > 0 && !force) return { ok: false, reason: 'peers-not-ready' };
+
+    for (const dropped of notReady) this.#roomCodeByPeer.delete(dropped.peerId);
+    room.peers = room.peers.filter((p) => p.ready);
+    room.locked = true;
+    return { ok: true, room, excluded: notReady };
   }
 
   /**
