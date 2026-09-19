@@ -7,6 +7,13 @@
 
 {
 	auto_https disable_redirects
+
+	# A browser given a bare IP sends no SNI, so Caddy has no server name to
+	# pick a certificate by and aborts the handshake — which is what a phone
+	# reports as ERR_SSL_PROTOCOL_ERROR. Phase 1 is joined by IP from phones,
+	# so naming the default explicitly is what makes the LAN URL reachable
+	# at all. Phase 2 has a real domain and real SNI, and this goes away.
+	default_sni {$RAVE_HOST:localhost}
 }
 
 https://{$RAVE_HOST:localhost}, https://localhost, https://127.0.0.1 {
