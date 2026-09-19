@@ -14,12 +14,15 @@ import type { Estimate } from '@/lib/clock';
  */
 export function DebugOverlay({
   estimate,
+  driftMs,
   connections,
   selfPeerId,
   isCreator,
 }: {
   /** Undefined on the creator: it is the clock, so it has no offset to itself. */
   estimate: Estimate | undefined;
+  /** Where the audio actually is against where the cue says it should be. */
+  driftMs: number;
   connections: ReadonlyMap<string, PeerConnectionState>;
   selfPeerId: string;
   isCreator: boolean;
@@ -37,6 +40,7 @@ export function DebugOverlay({
         // Zero samples with an offset still showing means the last round
         // landed nothing: the reading on screen is the previous one.
         isCreator ? '' : `samples ${estimate?.sampleCount ?? 0}${stale(estimate) ? ' (stale)' : ''}`,
+        `drift   ${driftMs >= 0 ? '+' : ''}${driftMs.toFixed(1)}ms`,
         '',
         ...[...connections].map(([peerId, state]) => `peer    ${peerId.slice(0, 8)} ${state}`),
       ]

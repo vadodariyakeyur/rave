@@ -11,6 +11,8 @@ interface FakeSource {
   buffer: unknown;
   connected: boolean;
   onended: (() => void) | null;
+  /** The real node's AudioParam, as far as the nudge is concerned. */
+  playbackRate: { value: number };
   started?: { when: number; offset: number };
   stopped?: number;
   start(when: number, offset: number): void;
@@ -28,6 +30,7 @@ function sink(startTime = 0) {
         buffer: undefined,
         connected: false,
         onended: null,
+        playbackRate: { value: 1 },
         start(when, offset) {
           source.started = { when, offset };
         },
@@ -222,6 +225,181 @@ describe('position', () => {
 
     assert.equal(player.state().playing, false);
     assert.equal(player.position(), 10);
+  });
+});
+
+describe('drift', () => {
+  /**
+   * A player mid-track, with the monotonic clock and the audio clock both
+   * at a known place. Drift is what the test then introduces between them.
+   */
+  function playing({ offsetMs = 0, userOffsetMs = 0 } = {}) {
+    const out = sink(0);
+    const clock = monotonic(1000);
+    const player = new Player({ sink: out, buffer: buffer(600), now: clock.now });
+    // Cued to start now, from the top.
+    player.apply({ type: 'play', startAt: 1000 + offsetMs, fromSeconds: 0 }, offsetMs, userOffsetMs);
+    return { out, clock, player };
+  }
+
+  /** Move both clocks forward together — the no-drift case. */
+  function elapse(ctx: ReturnType<typeof playing>, seconds: number) {
+    ctx.clock.advance(seconds * 1000);
+    ctx.out.currentTime += seconds;
+  }
+
+  it('reads zero while the two clocks agree', () => {
+    const ctx = playing();
+    elapse(ctx, 30);
+    assert.equal(ctx.player.drift(), 0);
+  });
+
+  it('reads positive when the audio clock has run ahead', () => {
+    const ctx = playing();
+    elapse(ctx, 30);
+    // The sound card ran 20ms fast over those 30s.
+    ctx.out.currentTime += 0.02;
+    assert.ok(Math.abs(ctx.player.drift() - 20) < 0.001, `got ${ctx.player.drift()}`);
+  });
+
+  it('reads negative when the audio clock has fallen behind', () => {
+    const ctx = playing();
+    elapse(ctx, 30);
+    ctx.out.currentTime -= 0.02;
+    assert.ok(Math.abs(ctx.player.drift() + 20) < 0.001, `got ${ctx.player.drift()}`);
+  });
+
+  it('measures against the corrected instant, not the creator\'s raw one', () => {
+    // A peer 250ms off the creator is not 250ms adrift. Ignoring the offset
+    // here would have every peer "correcting" its own clock difference away.
+    const ctx = playing({ offsetMs: 250 });
+    elapse(ctx, 30);
+    assert.equal(ctx.player.drift(), 0);
+  });
+
+  it('measures against the user offset too', () => {
+    // A Bluetooth listener deliberately 200ms late is where they asked to be.
+    const ctx = playing({ userOffsetMs: 200 });
+    elapse(ctx, 30);
+    assert.equal(ctx.player.drift(), 0);
+  });
+
+  it('reads zero when nothing is playing', () => {
+    const out = sink(0);
+    const player = new Player({ sink: out, buffer: buffer(60), now: monotonic(0).now });
+    assert.equal(player.drift(), 0, 'a stopped track cannot be adrift');
+  });
+
+  it('nudges playbackRate for drift small enough to hear through', () => {
+    const ctx = playing();
+    elapse(ctx, 30);
+    ctx.out.currentTime += 0.02; // 20ms ahead
+    ctx.player.correct();
+
+    const rate = ctx.out.last().playbackRate.value;
+    assert.ok(rate < 1, `running ahead should slow down, got ${rate}`);
+    assert.ok(rate > 0.99, `and inaudibly, got ${rate}`);
+    assert.equal(ctx.out.sources.length, 1, 'a nudge does not restart the source');
+  });
+
+  it('nudges the other way when behind', () => {
+    const ctx = playing();
+    elapse(ctx, 30);
+    ctx.out.currentTime -= 0.02;
+    ctx.player.correct();
+
+    const rate = ctx.out.last().playbackRate.value;
+    assert.ok(rate > 1, `running behind should speed up, got ${rate}`);
+    assert.ok(rate < 1.01, `and inaudibly, got ${rate}`);
+  });
+
+  it('leaves the rate alone when the drift is below the floor', () => {
+    // Correcting a 3ms drift is chasing measurement noise, and every nudge
+    // is a pitch change nobody asked for.
+    const ctx = playing();
+    elapse(ctx, 30);
+    ctx.out.currentTime += 0.003;
+    ctx.player.correct();
+    assert.equal(ctx.out.last().playbackRate.value, 1);
+  });
+
+  it('restores the rate once the drift is corrected away', () => {
+    const ctx = playing();
+    elapse(ctx, 30);
+    ctx.out.currentTime += 0.02;
+    ctx.player.correct();
+    assert.notEqual(ctx.out.last().playbackRate.value, 1);
+
+    // The nudge did its job: over the next 10s it pulled the 20ms back.
+    ctx.clock.advance(10_000);
+    ctx.out.currentTime += 10 - 0.02;
+    ctx.player.correct();
+    assert.equal(ctx.out.last().playbackRate.value, 1, 'a corrected track plays at its own speed');
+  });
+
+  it('reseeks rather than nudges when the drift is too big to nudge away', () => {
+    // 900ms is most of a second: nudging it out would take minutes and sound
+    // wrong the whole time. Jumping is the lesser evil.
+    const ctx = playing();
+    elapse(ctx, 30);
+    ctx.out.currentTime += 0.9;
+    ctx.player.correct();
+
+    assert.equal(ctx.out.sources.length, 2, 'a reseek is a new source');
+    const started = ctx.out.last().started;
+    assert.ok(started, 'the new source was started');
+    // Back to where the shared clock says we should be: 30s in.
+    assert.ok(Math.abs(started.offset - 30) < 0.01, `got ${started.offset}`);
+    assert.equal(ctx.out.last().playbackRate.value, 1, 'and at normal speed');
+  });
+
+  it('does nothing when there is nothing playing', () => {
+    const out = sink(0);
+    const player = new Player({ sink: out, buffer: buffer(60), now: monotonic(0).now });
+    assert.doesNotThrow(() => player.correct());
+    assert.equal(out.sources.length, 0);
+  });
+});
+
+describe('the user offset', () => {
+  it('reseeks the running track so the change is audible while dragging', () => {
+    // Calibrating by ear is the only mechanism there is: a slider whose
+    // effect you cannot hear until the next track is not a calibration.
+    const out = sink(0);
+    const clock = monotonic(1000);
+    const player = new Player({ sink: out, buffer: buffer(600), now: clock.now });
+    player.apply({ type: 'play', startAt: 1000, fromSeconds: 0 }, 0, 0);
+    clock.advance(30_000);
+    out.currentTime += 30;
+
+    player.setUserOffset(-200);
+
+    assert.equal(out.sources.length, 2, 'the change is heard now, not next cue');
+    const started = out.last().started;
+    assert.ok(started);
+    // Asking to hear it 200ms earlier means playing 200ms further in.
+    assert.ok(Math.abs(started.offset - 30.2) < 0.01, `got ${started.offset}`);
+  });
+
+  it('holds the value for a track that has not started yet', () => {
+    const out = sink(0);
+    const clock = monotonic(1000);
+    const player = new Player({ sink: out, buffer: buffer(600), now: clock.now });
+
+    player.setUserOffset(-200);
+    assert.equal(out.sources.length, 0, 'nothing to reseek');
+
+    // And the next cue honours it without being told again.
+    player.apply({ type: 'play', startAt: 1500, fromSeconds: 0 }, 0);
+    assert.equal(out.last().started?.when, 0.3, '500ms out, less the 200ms nudge');
+  });
+
+  it('is a no-op when the value has not actually changed', () => {
+    const out = sink(0);
+    const player = new Player({ sink: out, buffer: buffer(600), now: monotonic(1000).now });
+    player.apply({ type: 'play', startAt: 1000, fromSeconds: 0 }, 0, -200);
+    player.setUserOffset(-200);
+    assert.equal(out.sources.length, 1, 'no pointless reseek');
   });
 });
 

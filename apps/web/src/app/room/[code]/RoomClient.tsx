@@ -12,14 +12,17 @@ import type { Transfer } from '@/lib/transfer';
 import { ClockProbe, serveClock, type Estimate } from '@/lib/clock';
 import {
   broadcastCue,
+  DRIFT_CHECK_MS,
   listenForCues,
   Player,
   START_LEAD_MS,
   type Cue,
   type PlayerState,
 } from '@/lib/player';
+import { loadUserOffset, saveUserOffset } from '@/lib/offset';
 import { keepAwake, onHidden } from '@/lib/wake';
 import { DebugOverlay } from '@/components/DebugOverlay';
+import { OffsetSlider } from '@/components/OffsetSlider';
 import { Button } from '@/components/ui/button';
 import { ForceStartDialog } from '@/components/ForceStartDialog';
 import { PreJoin } from './PreJoin';
@@ -277,6 +280,30 @@ export function RoomClient() {
     };
   }, [player]);
 
+  // The audio clock and the monotonic clock diverge on their own, so a track
+  // that started in sync does not stay there. Checking costs nothing; the
+  // correction is a rate nudge until it is too far, then a reseek.
+  const [driftMs, setDriftMs] = useState(0);
+  useEffect(() => {
+    if (!player) return;
+    const timer = setInterval(() => {
+      player.correct();
+      setDriftMs(player.drift());
+    }, DRIFT_CHECK_MS);
+    return () => clearInterval(timer);
+  }, [player]);
+
+  // Lazily, because localStorage is not there during the server render.
+  const [userOffsetMs, setUserOffsetMs] = useState(() => loadUserOffset());
+  // The stored value has to reach a player that appears after it was read.
+  useEffect(() => {
+    player?.setUserOffset(userOffsetMs);
+  }, [player, userOffsetMs]);
+  const changeUserOffset = useCallback((value: number) => {
+    setUserOffsetMs(value);
+    saveUserOffset(value);
+  }, []);
+
   /**
    * Cue every peer, and ourselves, off one instant on our own clock.
    *
@@ -374,6 +401,7 @@ export function RoomClient() {
       {debug && (
         <DebugOverlay
           estimate={estimate}
+          driftMs={driftMs}
           connections={connections}
           selfPeerId={session.peerId}
           isCreator={isCreator}
@@ -409,6 +437,7 @@ export function RoomClient() {
             connections={connections}
             transfers={transfers}
           />
+          <OffsetSlider valueMs={userOffsetMs} onChange={changeUserOffset} />
           {isCreator && (
             <>
               <Button
