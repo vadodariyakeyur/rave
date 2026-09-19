@@ -202,9 +202,9 @@ const realClock: Clock = {
  * The peer's side: probe the creator, hold a live estimate.
  *
  * Rounds repeat for as long as this is open, because the answer changes.
- * A round that loses every probe leaves the previous estimate standing —
- * a stale offset is worth more than no offset, and the overlay shows the
- * sample count so a dying link is visible.
+ * A round that loses every probe keeps the previous offset — a stale offset
+ * is worth more than no offset — but reports zero samples, so the overlay
+ * says the reading is stale instead of showing it as fresh.
  */
 export class ClockProbe {
   readonly #channel: RTCDataChannel;
@@ -217,6 +217,8 @@ export class ClockProbe {
   #detach: (() => void) | undefined;
   /** Cancels whatever wait is outstanding, so close() does not leave one running. */
   #cancelWait: (() => void) | undefined;
+  /** The same, for the timeout on the probe currently in flight. */
+  #cancelProbe: (() => void) | undefined;
 
   constructor(channel: RTCDataChannel, clock: Clock = realClock) {
     this.#channel = channel;
@@ -253,6 +255,8 @@ export class ClockProbe {
     this.#detach = undefined;
     this.#cancelWait?.();
     this.#cancelWait = undefined;
+    this.#cancelProbe?.();
+    this.#cancelProbe = undefined;
     this.#pending.clear();
     this.#listeners.clear();
   }
@@ -261,11 +265,14 @@ export class ClockProbe {
     while (!this.#closed) {
       const samples = await this.#round();
       if (this.#closed) return;
-      // An empty round keeps the last estimate: see the class comment.
-      if (samples.length > 0) {
-        this.#estimate = estimate(samples);
-        for (const listener of [...this.#listeners]) listener();
-      }
+      // A lost round keeps the last offset but reports its own sample count,
+      // so a dying link reads as 0 samples rather than silently freezing on
+      // the last good number.
+      this.#estimate =
+        samples.length > 0
+          ? estimate(samples)
+          : { ...this.#estimate, rttsMs: [], sampleCount: 0 };
+      for (const listener of [...this.#listeners]) listener();
       await this.#wait(ROUND_INTERVAL_MS);
     }
   }
@@ -286,11 +293,14 @@ export class ClockProbe {
 
     return new Promise<Sample | undefined>((resolve) => {
       const settle = (sample: Sample | undefined) => {
-        clearTimeout(timer);
+        cancelTimeout();
         this.#pending.delete(id);
         resolve(sample);
       };
-      const timer = setTimeout(() => settle(undefined), PROBE_TIMEOUT_MS);
+      // Through the clock, not setTimeout: otherwise close() leaves this
+      // running for two seconds and the seam is only half a seam.
+      const cancelTimeout = this.#clock.sleep(PROBE_TIMEOUT_MS, () => settle(undefined));
+      this.#cancelProbe = cancelTimeout;
       this.#pending.set(id, (pong) => settle(sampleOf(pong, this.#clock.now())));
 
       const ping: ClockPing = { type: 'clock-ping', id, t0: this.#clock.now() };

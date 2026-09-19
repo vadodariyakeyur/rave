@@ -34,7 +34,9 @@ export function DebugOverlay({
         `self    ${selfPeerId.slice(0, 8)}${isCreator ? ' (clock master)' : ''}`,
         isCreator ? 'offset  — (this device is the reference)' : `offset  ${format(estimate)}`,
         isCreator ? '' : `rtt     ${rtts(estimate)}`,
-        isCreator ? '' : `samples ${estimate?.sampleCount ?? 0}`,
+        // Zero samples with an offset still showing means the last round
+        // landed nothing: the reading on screen is the previous one.
+        isCreator ? '' : `samples ${estimate?.sampleCount ?? 0}${stale(estimate) ? ' (stale)' : ''}`,
         '',
         ...[...connections].map(([peerId, state]) => `peer    ${peerId.slice(0, 8)} ${state}`),
       ]
@@ -51,6 +53,11 @@ export function DebugOverlay({
 function format(estimate: Estimate | undefined): string {
   if (estimate?.offsetMs === undefined) return 'measuring…';
   return `${estimate.offsetMs >= 0 ? '+' : ''}${estimate.offsetMs.toFixed(1)}ms`;
+}
+
+/** An offset with nothing behind it: held over from a round that landed. */
+function stale(estimate: Estimate | undefined): boolean {
+  return estimate?.offsetMs !== undefined && estimate.sampleCount === 0;
 }
 
 /** The kept samples, best first — the spread is what says whether to trust it. */

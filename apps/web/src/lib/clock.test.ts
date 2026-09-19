@@ -291,9 +291,9 @@ describe('ClockProbe', () => {
     stopServing();
   });
 
-  it('holds its last estimate through a round where nothing comes back', async () => {
-    // A stale offset beats no offset: the overlay shows the sample count, so
-    // a dying link is visible without the reading vanishing.
+  it('holds its last offset through a lost round, but reports it as stale', async () => {
+    // A stale offset beats no offset. Zero samples is how the overlay knows
+    // to say so, instead of showing the old number as if it were fresh.
     const { peer, host, clock, hostNow } = run({ offset: 100, oneWay: 1 });
     const stopServing = serveClock(host as never, hostNow);
     const probe = new ClockProbe(peer as never, clock);
@@ -308,7 +308,8 @@ describe('ClockProbe', () => {
     peer.readyState = 'closed';
     await step(clock, 10_000);
 
-    assert.equal(probe.estimate().offsetMs, good.offsetMs);
+    assert.equal(probe.estimate().offsetMs, good.offsetMs, 'the last good offset stands');
+    assert.equal(probe.estimate().sampleCount, 0, 'but it must not read as freshly measured');
     probe.close();
   });
 
