@@ -144,6 +144,21 @@ export function handleConnection(socket: WebSocket): void {
         return;
       }
 
+      case 'ready': {
+        // No payload to trust: the peer is whoever this socket is. A ready
+        // from a socket in no room is a race with a disconnect, not an error
+        // anyone needs to see.
+        const room = peerId === undefined ? undefined : rooms.setReady(peerId);
+        if (!room) return;
+
+        broadcast(
+          room.peers.map((p) => p.peerId),
+          rooms.toState(room),
+        );
+        log('peer ready', { code: room.code, ready: room.peers.filter((p) => p.ready).length });
+        return;
+      }
+
       case 'signal': {
         // Same-room check, not just same-server: without it any socket could
         // address any peer id and push SDP at a stranger's browser.

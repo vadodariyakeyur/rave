@@ -279,3 +279,18 @@ test('rejects a server-hello with no ice server list at all', () => {
   });
   assert.equal(parseServerMessage(raw), null);
 });
+
+describe('ready', () => {
+  it('parses a ready message', () => {
+    assert.equal(parseClientMessage(JSON.stringify({ type: 'ready' }))?.type, 'ready');
+  });
+
+  it('takes no payload, so a peer cannot mark anyone else ready', () => {
+    // Readiness is a fact about the sender's own device. The server knows
+    // which socket sent this; a peerId field would be a claim to check.
+    assert.equal(
+      parseClientMessage(JSON.stringify({ type: 'ready', peerId: '11111111-1111-4111-8111-111111111111' })),
+      null,
+    );
+  });
+});

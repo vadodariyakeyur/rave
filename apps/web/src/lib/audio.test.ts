@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { armAudio, decodeFile, DECODE_ERROR } from './audio.ts';
+import { armAudio, decodeBytes, DECODE_ERROR } from './audio.ts';
 
 /**
  * Fakes stand in for Web Audio, which does not exist in Node. What is under
@@ -44,32 +44,43 @@ describe('armAudio', () => {
   });
 });
 
-describe('decodeFile', () => {
+describe('decodeBytes', () => {
+  it('leaves the caller their bytes, because the creator still has to send them', async () => {
+    // decodeAudioData detaches what it is handed. Handing it a copy is the
+    // whole reason the creator can transfer the file after decoding it.
+    const bytes = new ArrayBuffer(8);
+    const ctx = {
+      decodeAudioData: async (b: ArrayBuffer) => {
+        assert.notEqual(b, bytes, 'must not hand the caller\'s own buffer over');
+        return { duration: 1 } as AudioBuffer;
+      },
+    };
+    await decodeBytes(ctx as never, bytes);
+    assert.equal(bytes.byteLength, 8, 'the caller\'s buffer was detached');
+  });
+
   it('returns the decoded buffer and its duration', async () => {
     const { ctx } = fakeContext();
-    const file = new File([new Uint8Array([1, 2, 3])], 'a.mp3', { type: 'audio/mpeg' });
-    const result = await decodeFile(ctx as never, file);
+    const result = await decodeBytes(ctx as never, new ArrayBuffer(8));
     assert.equal(result.durationSeconds, 12.5);
     assert.ok(result.buffer);
   });
 
-  it('throws a human-readable error when the file cannot be decoded', async () => {
+  it('throws a human-readable error rather than leaking a DOMException', async () => {
     const { ctx } = fakeContext({
       decode: async () => { throw new DOMException('Unable to decode audio data', 'EncodingError'); },
     });
-    const file = new File([new Uint8Array([9])], 'notaudio.txt', { type: 'text/plain' });
-    await assert.rejects(() => decodeFile(ctx as never, file), (err: Error) => {
-      assert.equal(err.message, DECODE_ERROR);
-      return true;
-    });
+    await assert.rejects(
+      () => decodeBytes(ctx as never, new ArrayBuffer(8)),
+      (err: Error) => err.message === DECODE_ERROR,
+    );
   });
 
   it('rejects a zero-length decode rather than issuing a room for silence', async () => {
     const { ctx } = fakeContext({ decode: async () => ({ duration: 0 }) });
-    const file = new File([new Uint8Array([1])], 'empty.mp3', { type: 'audio/mpeg' });
-    await assert.rejects(() => decodeFile(ctx as never, file), (err: Error) => {
-      assert.equal(err.message, DECODE_ERROR);
-      return true;
-    });
+    await assert.rejects(
+      () => decodeBytes(ctx as never, new ArrayBuffer(8)),
+      (err: Error) => err.message === DECODE_ERROR,
+    );
   });
 });

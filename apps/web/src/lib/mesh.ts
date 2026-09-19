@@ -65,6 +65,18 @@ export class Mesh {
     return this.#states;
   }
 
+  /**
+   * This peer's DataChannel, once it is actually usable.
+   *
+   * Only when open: a channel exists from the moment it is created, and
+   * sending down one that is still connecting throws mid-transfer. The
+   * caller retries on the next notify rather than guarding this itself.
+   */
+  channel(peerId: string): RTCDataChannel | undefined {
+    const channel = this.#connections.get(peerId)?.channel;
+    return channel?.readyState === 'open' ? channel : undefined;
+  }
+
   /** For useSyncExternalStore. */
   subscribe(listener: () => void): () => void {
     this.#listeners.add(listener);
@@ -133,9 +145,11 @@ export class Mesh {
       // partial reliability. An explicit option is also something a test can
       // hold onto.
       connection.channel = pc.createDataChannel('rave', { ordered: true });
+      this.#watchChannel(connection.channel);
     } else {
       pc.addEventListener('datachannel', (event) => {
         connection.channel = event.channel;
+        this.#watchChannel(event.channel);
       });
     }
 
@@ -197,6 +211,15 @@ export class Mesh {
       // an error worth surfacing — connectionstatechange reports the outcome.
       await connection.pc.addIceCandidate(payload.candidate).catch(() => {});
     }
+  }
+
+  /**
+   * A channel opens after connectionstatechange has already said 'connected',
+   * so nothing else announces the one moment a transfer may begin.
+   */
+  #watchChannel(channel: RTCDataChannel): void {
+    if (channel.readyState === 'open') return this.#notify();
+    channel.addEventListener('open', () => this.#notify());
   }
 
   #send(peerId: string, payload: SignalPayload): void {

@@ -197,3 +197,23 @@ describe('RoomRegistry', () => {
     assert.deepEqual(result, { kind: 'closed', code: room.code, reason: 'room-empty' });
   });
 });
+
+describe('setReady', () => {
+  it('flips a joiner to ready and reports the room it is in', () => {
+    const reg = new RoomRegistry();
+    const room = reg.create({ roomName: 'Kitchen', displayName: 'Keyur', durationSeconds: 100 });
+    const joined = reg.join(room.code, 'Ada');
+    assert.ok(joined.ok);
+
+    const found = reg.setReady(joined.peerId);
+    assert.equal(found?.code, room.code);
+    assert.equal(found?.peers.find((p) => p.peerId === joined.peerId)?.ready, true);
+  });
+
+  it('is unknown for a peer in no room, rather than throwing', () => {
+    // A ready can race a disconnect; the socket handler must be able to
+    // shrug rather than take the process down.
+    const reg = new RoomRegistry();
+    assert.equal(reg.setReady('11111111-1111-4111-8111-111111111111'), undefined);
+  });
+});

@@ -118,6 +118,19 @@ export class RoomRegistry {
   }
 
   /**
+   * Mark a peer as holding the decoded file. Returns their room so the
+   * caller can rebroadcast the roster, or undefined if they are in none —
+   * a ready can race a disconnect, and that is not worth an exception.
+   */
+  setReady(peerId: string): Room | undefined {
+    const room = this.roomForPeer(peerId);
+    const peer = room?.peers.find((p) => p.peerId === peerId);
+    if (!room || !peer) return undefined;
+    peer.ready = true;
+    return room;
+  }
+
+  /**
    * Remove a peer. If they were the creator the whole room goes with them:
    * the creator is the clock master, so the room cannot play without one.
    *

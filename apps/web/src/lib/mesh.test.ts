@@ -19,6 +19,15 @@ const pcs: FakePeerConnection[] = [];
 
 class FakeDataChannel {
   closed = false;
+  readyState: RTCDataChannelState = 'connecting';
+  readonly #listeners = new Map<string, (() => void)[]>();
+  addEventListener(type: string, fn: () => void): void {
+    this.#listeners.set(type, [...(this.#listeners.get(type) ?? []), fn]);
+  }
+  open(): void {
+    this.readyState = 'open';
+    for (const fn of this.#listeners.get('open') ?? []) fn();
+  }
   close(): void {
     this.closed = true;
   }
@@ -278,6 +287,32 @@ describe('Mesh', () => {
     await settle();
 
     assert.deepEqual(pcs[0]!.channelOptions, [{ ordered: true }]);
+  });
+
+  it('hands out the channel to a connected peer, and nothing before it opens', async () => {
+    // #5 sends the file down these. A half-open channel handed out early is
+    // a send that throws in the middle of a transfer.
+    const { mesh } = meshFor(A);
+    mesh.sync([peer(A), peer(B)]);
+    await settle();
+    assert.equal(mesh.channel(B), undefined, 'not while the channel is still connecting');
+
+    pcs[0]!.channels[0]!.open();
+    assert.equal(mesh.channel(B), pcs[0]!.channels[0] as unknown as RTCDataChannel);
+    assert.equal(mesh.channel(C), undefined, 'a peer with no connection has no channel');
+  });
+
+  it('notifies when a channel opens, so a waiting transfer can start', async () => {
+    // The channel opens after connectionstatechange has already fired. With
+    // no notify, a sender subscribed to the mesh never learns it may send.
+    const { mesh } = meshFor(A);
+    mesh.sync([peer(A), peer(B)]);
+    await settle();
+
+    let notified = 0;
+    mesh.subscribe(() => notified++);
+    pcs[0]!.channels[0]!.open();
+    assert.equal(notified, 1);
   });
 
   it('reports a negotiation that throws as failed', async () => {

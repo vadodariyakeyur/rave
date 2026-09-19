@@ -22,12 +22,18 @@ export async function armAudio(ctx: AudioContext): Promise<void> {
   silence.start();
 }
 
-export async function decodeFile(ctx: AudioContext, file: File): Promise<DecodedTrack> {
-  const bytes = await file.arrayBuffer();
+/**
+ * Decode encoded audio, leaving the caller's bytes intact.
+ *
+ * decodeAudioData detaches what it is given, so it gets a copy: the creator
+ * has to send those same bytes to every peer afterwards, and a joiner keeps
+ * them so a peer arriving later can be served from any device, not only the
+ * creator's.
+ */
+export async function decodeBytes(ctx: AudioContext, bytes: ArrayBuffer): Promise<DecodedTrack> {
   let buffer: AudioBuffer;
   try {
-    // decodeAudioData detaches the buffer, so peers get their own copy later.
-    buffer = await ctx.decodeAudioData(bytes);
+    buffer = await ctx.decodeAudioData(bytes.slice(0));
   } catch {
     throw new Error(DECODE_ERROR);
   }

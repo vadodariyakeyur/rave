@@ -1,7 +1,7 @@
 'use client';
 
 import { RoomCode, type IceServer, type RoomClosed, type RoomState } from '@rave/protocol';
-import { armAudio, decodeFile, type DecodedTrack } from './audio';
+import { armAudio, decodeBytes, type DecodedTrack } from './audio';
 import { Signaling } from './signaling';
 
 /**
@@ -23,6 +23,13 @@ export interface Session {
    */
   buffer?: AudioBuffer;
   fileName?: string;
+  /**
+   * The still-encoded file, kept because that is what goes down the
+   * DataChannel — an AudioBuffer is decoded PCM, tens of times larger. A
+   * joiner keeps theirs too, so a later arrival can be served by any device
+   * rather than only the creator's.
+   */
+  bytes?: ArrayBuffer;
   peerId: string;
   code: string;
   state: RoomState;
@@ -74,9 +81,13 @@ export async function createRoom(input: {
 }): Promise<Session> {
   const audioContext = new AudioContext();
   let decoded: DecodedTrack;
+  let bytes: ArrayBuffer;
   try {
     await armAudio(audioContext);
-    decoded = await decodeFile(audioContext, input.file);
+    // Read once: decodeBytes copies for the decoder, so these survive to be
+    // sent to every peer.
+    bytes = await input.file.arrayBuffer();
+    decoded = await decodeBytes(audioContext, bytes);
   } catch (err) {
     // Nothing exists yet, so the only cleanup is the context we just opened.
     await audioContext.close();
@@ -117,6 +128,7 @@ export async function createRoom(input: {
         audioContext,
         buffer: decoded.buffer,
         fileName: input.file.name,
+        bytes,
         peerId,
         code: msg.code,
         state: msg,

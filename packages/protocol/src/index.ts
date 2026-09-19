@@ -114,6 +114,22 @@ export const JoinRoom = z.object({
 export type JoinRoom = z.infer<typeof JoinRoom>;
 
 /**
+ * Client -> server. "I hold the whole file and it decoded."
+ *
+ * No payload: readiness is a fact about the sender's own device, and the
+ * server already knows which socket sent this. A peerId field would be a
+ * claim someone could make about somebody else.
+ */
+export const Ready = z
+  .object({
+    type: z.literal('ready'),
+  })
+  // Strict, unlike the rest: zod would otherwise strip an extra peerId and
+  // parse this happily, which reads as accepting a claim we then ignore.
+  .strict();
+export type Ready = z.infer<typeof Ready>;
+
+/**
  * Client -> server, then server -> client, relayed to one named peer.
  *
  * The payload is opaque on purpose: it carries SDP and ICE candidates whose
@@ -189,7 +205,7 @@ export const ErrorMessage = z.object({
 });
 export type ErrorMessage = z.infer<typeof ErrorMessage>;
 
-export const ClientMessage = z.discriminatedUnion('type', [Ping, CreateRoom, JoinRoom, Signal]);
+export const ClientMessage = z.discriminatedUnion('type', [Ping, CreateRoom, JoinRoom, Signal, Ready]);
 export type ClientMessage = z.infer<typeof ClientMessage>;
 
 export const ServerMessage = z.discriminatedUnion('type', [

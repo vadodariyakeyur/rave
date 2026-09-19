@@ -5,6 +5,9 @@ import { useParams } from 'next/navigation';
 import { getSession, patchSession, subscribeSession, type Session } from '@/lib/session';
 import { Roster } from '@/components/Roster';
 import { Mesh, type PeerConnectionState } from '@/lib/mesh';
+import { Distributor, Receiver } from '@/lib/distribute';
+import type { Transfer } from '@/lib/transfer';
+import { Button } from '@/components/ui/button';
 import { PreJoin } from './PreJoin';
 
 export function RoomClient() {
@@ -32,7 +35,10 @@ export function RoomClient() {
 
   // The mesh outlives any single render but dies with the socket, so it is
   // created alongside the same effect that owns the socket's listeners.
-  const mesh = useRef<Mesh | undefined>(undefined);
+  //
+  // State, not a ref: the transfer effects below have to start when the mesh
+  // appears, and a ref assignment renders nothing for them to start from.
+  const [mesh, setMesh] = useState<Mesh | undefined>(undefined);
   const [connections, setConnections] = useState<ReadonlyMap<string, PeerConnectionState>>(
     new Map(),
   );
@@ -41,14 +47,18 @@ export function RoomClient() {
   useEffect(() => {
     if (!signaling || !selfPeerId || !iceServers) return;
     const created = new Mesh({ signaling, selfPeerId, iceServers });
-    mesh.current = created;
+    // The one render this costs is the point: the transfer effects below key
+    // on the mesh, and they cannot start from something they never see. It
+    // fires once per socket, not per roster change.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setMesh(created);
     // A new Map each time: the mesh mutates its own in place, and React
     // would skip a render on an unchanged reference.
     const unsubscribe = created.subscribe(() => setConnections(new Map(created.states())));
     return () => {
       unsubscribe();
       created.close();
-      mesh.current = undefined;
+      setMesh(undefined);
     };
   }, [signaling, selfPeerId, iceServers]);
 
@@ -58,18 +68,78 @@ export function RoomClient() {
   const peers = session?.state.peers;
   const ended = session?.ended;
   useEffect(() => {
-    if (!peers) return;
-    // A room that has ended has no peers left to hold open. close() also stops
-    // the mesh listening, so it is dropped rather than left reachable: 'ended'
-    // includes a dropped socket, and a later roster would otherwise sync onto
-    // a deaf mesh and open connections that can never be signalled.
+    if (!peers || !mesh) return;
+    // A room that has ended has no peers left to hold open. Closing also stops
+    // the mesh listening, which is the part that matters: 'ended' includes our
+    // own socket dropping, and a later roster would otherwise sync onto a deaf
+    // mesh and open connections that can never be signalled. The instance goes
+    // when the socket effect unwinds; every transfer effect bails on `ended`.
     if (ended) {
-      mesh.current?.close();
-      mesh.current = undefined;
+      mesh.close();
       return;
     }
-    mesh.current?.sync(peers);
-  }, [peers, ended]);
+    mesh.sync(peers);
+  }, [peers, ended, mesh]);
+
+  // Who holds the file, and how far along. The creator watches every peer's
+  // download; a joiner watches only its own. Both end up in one map because
+  // the roster renders one list either way.
+  const [transfers, setTransfers] = useState<ReadonlyMap<string, Transfer>>(new Map());
+  const bytes = session?.bytes;
+  const fileName = session?.fileName;
+  const creatorId = peers?.find((p) => p.isCreator)?.peerId;
+  const isCreator = selfPeerId !== undefined && selfPeerId === creatorId;
+
+  // Keyed on the mesh instance, not on `peers`: the roster changes on every
+  // join and this must not tear down a transfer in flight when it does.
+  const distributorRef = useRef<Distributor | undefined>(undefined);
+  useEffect(() => {
+    if (!mesh || ended) return;
+    if (!isCreator) return;
+    if (!bytes || !fileName) return;
+    const distributor = new Distributor(mesh, { bytes, fileName });
+    const unsubscribe = distributor.subscribe(() =>
+      setTransfers(new Map(distributor.transfers())),
+    );
+    distributorRef.current = distributor;
+    return () => {
+      unsubscribe();
+      distributor.close();
+      distributorRef.current = undefined;
+      setTransfers(new Map());
+    };
+  }, [mesh, isCreator, bytes, fileName, ended]);
+
+  // Feeding the roster in separately keeps the effect above off `peers`.
+  useEffect(() => {
+    if (!peers || !selfPeerId) return;
+    distributorRef.current?.sync(peers.filter((p) => p.peerId !== selfPeerId).map((p) => p.peerId));
+  }, [peers, selfPeerId]);
+
+  useEffect(() => {
+    if (!mesh || ended || isCreator) return;
+    if (!session || !creatorId || !selfPeerId) return;
+    // Already holding the file: a rejoin after the transfer landed.
+    if (session.buffer) return;
+    const receiver = new Receiver(mesh, creatorId, session);
+    const unsubscribe = receiver.subscribe(() => {
+      setTransfers(new Map([[selfPeerId, receiver.transfer()]]));
+      const result = receiver.result();
+      // Keep the decoded track and the bytes: #6 plays the one, and a later
+      // joiner can be served from the other.
+      if (result && !getSession()?.buffer) {
+        patchSession({ buffer: result.buffer, fileName: result.fileName, bytes: result.bytes });
+      }
+    });
+    receiver.start();
+    return () => {
+      unsubscribe();
+      receiver.close();
+    };
+    // `session` is deliberately absent: it is replaced on every patch, and
+    // depending on it would restart the download on the first progress tick.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mesh, isCreator, creatorId, selfPeerId, ended]);
 
   // No session means a refresh or a pasted link — the tap that arms audio has
   // not happened, so this is where it happens.
@@ -77,6 +147,11 @@ export function RoomClient() {
   if (!session) return code ? <PreJoin code={code} /> : null;
 
   const { state } = session;
+  // The server's flag, not our own view of it: a peer we cannot see is still
+  // in the room, and the barrier is the whole room's business. An empty room
+  // is not "everyone ready" — every() says true for nobody, and a creator
+  // alone would get a lit button with no one to play to.
+  const everyoneReady = state.peers.length > 1 && state.peers.every((p) => p.ready);
 
   return (
     <main className="mx-auto flex min-h-dvh max-w-md flex-col gap-8 p-8">
@@ -104,7 +179,29 @@ export function RoomClient() {
           <h2 className="text-sm font-medium text-[var(--color-muted-foreground)]">
             In the room
           </h2>
-          <Roster peers={state.peers} selfPeerId={session.peerId} connections={connections} />
+          <Roster
+            peers={state.peers}
+            selfPeerId={session.peerId}
+            connections={connections}
+            transfers={transfers}
+          />
+          {isCreator && (
+            <>
+              <Button
+                type="button"
+                disabled={!everyoneReady}
+                // #6 schedules the actual start; the barrier is what #5 owes it.
+                onClick={() => undefined}
+              >
+                Play
+              </Button>
+              {!everyoneReady && (
+                <p className="text-xs text-[var(--color-muted-foreground)]">
+                  Waiting for everyone to finish downloading.
+                </p>
+              )}
+            </>
+          )}
         </section>
       )}
     </main>

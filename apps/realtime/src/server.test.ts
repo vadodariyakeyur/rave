@@ -114,3 +114,23 @@ describe('signal relay', () => {
     assert.equal(host.last('error').code, 'peer-not-found');
   });
 });
+
+describe('ready', () => {
+  it('marks the sender ready and tells the whole room', () => {
+    const { host, guest, guestId } = pair();
+    assert.equal(guest.last('room-state').peers.find((p) => p.peerId === guestId)?.ready, false);
+
+    guest.receive({ type: 'ready' });
+
+    // The host is the one gating the Play button, so the host must see it.
+    assert.equal(host.last('room-state').peers.find((p) => p.peerId === guestId)?.ready, true);
+    assert.equal(guest.last('room-state').peers.find((p) => p.peerId === guestId)?.ready, true);
+  });
+
+  it('ignores a ready from a socket that is in no room', () => {
+    // Otherwise a stray ready before join-room takes the server down.
+    const stray = connect();
+    stray.receive({ type: 'ready' });
+    assert.equal(stray.sent.some((m) => m.type === 'room-state'), false);
+  });
+});
