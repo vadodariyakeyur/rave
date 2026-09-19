@@ -103,4 +103,65 @@ describe('RoomRegistry', () => {
     reg.removePeer(peerId);
     assert.equal(reg.size, 0);
   });
+
+  it('adds a joiner as a non-creator who is not yet ready', () => {
+    const reg = new RoomRegistry();
+    const room = reg.create({ roomName: 'Kitchen', displayName: 'Keyur', durationSeconds: 100 });
+
+    const joined = reg.join(room.code, 'Sam');
+    assert.equal(joined.ok, true);
+    if (!joined.ok) return;
+
+    assert.equal(joined.room.peers.length, 2);
+    const peer = joined.room.peers.find((p) => p.peerId === joined.peerId)!;
+    assert.equal(peer.displayName, 'Sam');
+    assert.equal(peer.isCreator, false);
+    // Nothing has been transferred yet — ready is earned in #5, not on arrival.
+    assert.equal(peer.ready, false);
+  });
+
+  it('refuses a join for a code no room has', () => {
+    const reg = new RoomRegistry();
+    const joined = reg.join('ZZZZZZ', 'Sam');
+    assert.equal(joined.ok, false);
+    if (joined.ok) return;
+    assert.equal(joined.reason, 'room-not-found');
+  });
+
+  it('refuses a join once the room is locked', () => {
+    const reg = new RoomRegistry();
+    const room = reg.create({ roomName: 'Kitchen', displayName: 'Keyur', durationSeconds: 100 });
+    room.locked = true;
+
+    const joined = reg.join(room.code, 'Sam');
+    assert.equal(joined.ok, false);
+    if (joined.ok) return;
+    assert.equal(joined.reason, 'room-locked');
+  });
+
+  it('keeps the room alive when a joiner leaves, and drops only them', () => {
+    const reg = new RoomRegistry();
+    const room = reg.create({ roomName: 'Kitchen', displayName: 'Keyur', durationSeconds: 100 });
+    const joined = reg.join(room.code, 'Sam');
+    assert.ok(joined.ok);
+
+    const survivor = reg.removePeer(joined.peerId);
+    assert.equal(survivor?.code, room.code);
+    assert.equal(survivor?.peers.length, 1);
+    assert.equal(reg.get(room.code)?.peers.length, 1);
+  });
+
+  it('closes the room out from under joiners when the creator leaves', () => {
+    const reg = new RoomRegistry();
+    const room = reg.create({ roomName: 'Kitchen', displayName: 'Keyur', durationSeconds: 100 });
+    const joined = reg.join(room.code, 'Sam');
+    assert.ok(joined.ok);
+
+    reg.removePeer(room.peers[0]!.peerId);
+    assert.equal(reg.get(room.code), undefined);
+    // The joiner's reverse index must go too, or their later close event
+    // would point at a room that no longer exists.
+    assert.equal(reg.roomForPeer(joined.peerId), undefined);
+    assert.equal(reg.size, 0);
+  });
 });

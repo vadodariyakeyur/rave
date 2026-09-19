@@ -80,6 +80,17 @@ export const CreateRoom = z.object({
 });
 export type CreateRoom = z.infer<typeof CreateRoom>;
 
+/**
+ * Client -> server. Sent from the pre-join tap, which is also what arms the
+ * joiner's audio. The code is whatever the person typed or the link carried.
+ */
+export const JoinRoom = z.object({
+  type: z.literal('join-room'),
+  code: RoomCode,
+  displayName: DisplayName,
+});
+export type JoinRoom = z.infer<typeof JoinRoom>;
+
 /** Server -> client. The room exists; this is its code. */
 export const RoomCreated = z.object({
   type: z.literal('room-created'),
@@ -99,6 +110,30 @@ export const RoomState = z.object({
 });
 export type RoomState = z.infer<typeof RoomState>;
 
+/**
+ * Server -> client. The joiner's own peerId, which the roster alone cannot
+ * give them — it lists everyone without saying which one they are. Mirrors
+ * room-created, and is followed by a room-state broadcast.
+ */
+export const RoomJoined = z.object({
+  type: z.literal('room-joined'),
+  code: RoomCode,
+  peerId: z.uuid(),
+});
+export type RoomJoined = z.infer<typeof RoomJoined>;
+
+/**
+ * Server -> client. The room is gone and will not come back. Distinct from a
+ * dropped socket, which might reconnect: this one is final, so the UI can say
+ * what happened instead of leaving a roster frozen on screen.
+ */
+export const RoomClosed = z.object({
+  type: z.literal('room-closed'),
+  code: RoomCode,
+  reason: z.enum(['creator-left']),
+});
+export type RoomClosed = z.infer<typeof RoomClosed>;
+
 /** Server -> client. Something the person needs to see, in their words. */
 export const ErrorMessage = z.object({
   type: z.literal('error'),
@@ -107,14 +142,16 @@ export const ErrorMessage = z.object({
 });
 export type ErrorMessage = z.infer<typeof ErrorMessage>;
 
-export const ClientMessage = z.discriminatedUnion('type', [Ping, CreateRoom]);
+export const ClientMessage = z.discriminatedUnion('type', [Ping, CreateRoom, JoinRoom]);
 export type ClientMessage = z.infer<typeof ClientMessage>;
 
 export const ServerMessage = z.discriminatedUnion('type', [
   ServerHello,
   Pong,
   RoomCreated,
+  RoomJoined,
   RoomState,
+  RoomClosed,
   ErrorMessage,
 ]);
 export type ServerMessage = z.infer<typeof ServerMessage>;

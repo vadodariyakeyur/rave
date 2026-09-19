@@ -24,6 +24,14 @@ export interface Room {
   locked: boolean;
 }
 
+/**
+ * Why a result and not an exception: both refusals are ordinary outcomes of
+ * someone typing a code, and the reason maps straight onto a wire error code.
+ */
+export type JoinResult =
+  | { ok: true; room: Room; peerId: string }
+  | { ok: false; reason: 'room-not-found' | 'room-locked' };
+
 export interface CreateRoomInput {
   roomName: string;
   displayName: string;
@@ -71,6 +79,25 @@ export class RoomRegistry {
     this.#byCode.set(room.code, room);
     this.#roomCodeByPeer.set(creator.peerId, room.code);
     return room;
+  }
+
+  /** Add a peer to an existing, unlocked room. */
+  join(code: string, displayName: string): JoinResult {
+    const room = this.#byCode.get(code);
+    if (!room) return { ok: false, reason: 'room-not-found' };
+    // Locked means playback has started; a late joiner has no way to catch up.
+    if (room.locked) return { ok: false, reason: 'room-locked' };
+
+    const peer: Peer = {
+      peerId: randomUUID(),
+      displayName,
+      isCreator: false,
+      // Ready is earned by holding the decoded file, which happens in #5.
+      ready: false,
+    };
+    room.peers.push(peer);
+    this.#roomCodeByPeer.set(peer.peerId, room.code);
+    return { ok: true, room, peerId: peer.peerId };
   }
 
   get(code: string): Room | undefined {

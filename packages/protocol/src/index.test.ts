@@ -151,6 +151,61 @@ describe('server room messages', () => {
     assert.equal(msg?.type === 'room-state' && msg.peers.length, 1);
   });
 
+  it('parses join-room and normalises the code', () => {
+    const msg = parseClientMessage(
+      JSON.stringify({ type: 'join-room', code: 'abc234', displayName: 'Keyur' }),
+    );
+    // Codes are read aloud and typed by hand, so case is not the sender's problem.
+    assert.equal(msg?.type === 'join-room' && msg.code, 'ABC234');
+  });
+
+  it('rejects join-room with a code that is not a room code', () => {
+    for (const code of ['ABC23', 'ABC2345', 'ABC2O4', 'ABC2 4', '']) {
+      assert.equal(
+        parseClientMessage(JSON.stringify({ type: 'join-room', code, displayName: 'Keyur' })),
+        null,
+        `expected ${JSON.stringify(code)} to be rejected`,
+      );
+    }
+  });
+
+  it('rejects join-room with a blank display name', () => {
+    assert.equal(
+      parseClientMessage(JSON.stringify({ type: 'join-room', code: 'ABC234', displayName: '  ' })),
+      null,
+    );
+  });
+
+  it('parses room-closed', () => {
+    const msg = parseServerMessage(
+      JSON.stringify({ type: 'room-closed', code: 'ABC234', reason: 'creator-left' }),
+    );
+    assert.equal(msg?.type === 'room-closed' && msg.reason, 'creator-left');
+  });
+
+  it('rejects room-closed with an unknown reason', () => {
+    assert.equal(
+      parseServerMessage(JSON.stringify({ type: 'room-closed', code: 'ABC234', reason: 'bored' })),
+      null,
+    );
+  });
+
+  it('parses a room-joined message', () => {
+    const msg = parseServerMessage(
+      JSON.stringify({
+        type: 'room-joined',
+        code: 'ABC234',
+        peerId: '11111111-1111-4111-8111-111111111111',
+      }),
+    );
+    assert.equal(msg?.type, 'room-joined');
+  });
+
+  it('rejects a room-joined message without a peer id', () => {
+    const msg = parseServerMessage(JSON.stringify({ type: 'room-joined', code: 'ABC234' }));
+    assert.equal(msg, null);
+  });
+
   it('rejects an error message with an unknown code', () => {
     assert.equal(
       parseServerMessage(

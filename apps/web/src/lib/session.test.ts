@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { createRoom, getSession, setSession } from './session.ts';
+import { createRoom, joinRoom, getSession, setSession } from './session.ts';
 
 /**
  * The invariant this ticket exists for: a file that cannot be decoded must
@@ -172,5 +172,52 @@ describe('createRoom', () => {
     assert.equal(getSession(), undefined);
     assert.equal(socket.readyState, 3);
     assert.equal(contexts[0]?.closed, true);
+  });
+});
+
+describe('joinRoom', () => {
+  it('sends join-room and resolves with our own peer id and no buffer', async () => {
+    const promise = joinRoom({ code: 'ABC234', displayName: 'Sam' });
+    await flush();
+
+    const socket = sockets[0]!;
+    assert.deepEqual(JSON.parse(socket.sent[0]!), {
+      type: 'join-room',
+      code: 'ABC234',
+      displayName: 'Sam',
+    });
+
+    socket.deliver({ type: 'room-joined', code: 'ABC234', peerId: OTHER });
+    socket.deliver({
+      type: 'room-state',
+      code: 'ABC234',
+      roomName: 'Kitchen',
+      locked: false,
+      peers: [
+        { peerId: CREATOR, displayName: 'Keyur', isCreator: true, ready: true },
+        { peerId: OTHER, displayName: 'Sam', isCreator: false, ready: false },
+      ],
+    });
+
+    const session = await promise;
+    assert.equal(session.peerId, OTHER);
+    // The joiner has nothing to play yet; the transfer is #5.
+    assert.equal(session.buffer, undefined);
+    assert.equal(getSession()?.peerId, OTHER);
+  });
+
+  it('rejects an unknown code and leaves no session behind', async () => {
+    const promise = joinRoom({ code: 'ZZZZZZ', displayName: 'Sam' });
+    await flush();
+
+    sockets[0]!.deliver({
+      type: 'error',
+      code: 'room-not-found',
+      message: 'No room with that code. Check it and try again.',
+    });
+
+    await assert.rejects(promise, /No room with that code/);
+    assert.equal(getSession(), undefined);
+    assert.equal(contexts[0]!.closed, true);
   });
 });

@@ -17,11 +17,17 @@ import { Signaling } from './signaling';
 export interface Session {
   signaling: Signaling;
   audioContext: AudioContext;
-  buffer: AudioBuffer;
-  fileName: string;
+  /**
+   * Absent for a joiner until the transfer lands in #5. The creator has it
+   * from the start, which is the whole reason they can issue a code.
+   */
+  buffer?: AudioBuffer;
+  fileName?: string;
   peerId: string;
   code: string;
   state: RoomState;
+  /** Set when the creator leaves: the room is over and will not come back. */
+  closed?: boolean;
 }
 
 let current: Session | undefined;
@@ -118,5 +124,63 @@ export async function createRoom(input: {
       displayName: input.displayName,
       durationSeconds: decoded.durationSeconds,
     });
+  });
+}
+
+/**
+ * Arm audio, then join. Same ordering rule as createRoom and the same reason:
+ * the AudioContext must be constructed inside the caller's gesture, so this
+ * has to be called synchronously from the Join handler. There is no file to
+ * decode yet — the transfer arrives in #5.
+ */
+export async function joinRoom(input: { code: string; displayName: string }): Promise<Session> {
+  const audioContext = new AudioContext();
+  try {
+    await armAudio(audioContext);
+  } catch (err) {
+    await audioContext.close();
+    throw err;
+  }
+
+  const signaling = new Signaling();
+  return new Promise<Session>((resolve, reject) => {
+    const settle = async (err: Error) => {
+      unsubscribe();
+      signaling.close();
+      await audioContext.close();
+      reject(err);
+    };
+    const unsubscribeClose = signaling.onClose(() => {
+      void settle(new Error('Lost the connection to the server. Check the network and try again.'));
+    });
+
+    // room-joined carries our peerId, room-state the roster. Same two-message
+    // handshake as create, for the same reason: neither is enough alone.
+    let peerId: string | undefined;
+    const unsubscribeMessage = signaling.onMessage((msg) => {
+      if (msg.type === 'error') return void settle(new Error(msg.message));
+      if (msg.type === 'room-joined') {
+        peerId = msg.peerId;
+        return;
+      }
+      if (msg.type !== 'room-state' || peerId === undefined) return;
+      unsubscribe();
+      const session: Session = {
+        signaling,
+        audioContext,
+        peerId,
+        code: msg.code,
+        state: msg,
+      };
+      setSession(session);
+      resolve(session);
+    });
+
+    function unsubscribe(): void {
+      unsubscribeClose();
+      unsubscribeMessage();
+    }
+
+    signaling.send({ type: 'join-room', code: input.code, displayName: input.displayName });
   });
 }

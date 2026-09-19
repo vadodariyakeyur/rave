@@ -29,6 +29,20 @@ function send(socket: WebSocket, msg: ServerMessage): void {
   if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(msg));
 }
 
+/**
+ * Sockets by peer, so a roster change can reach everyone else in the room.
+ * The registry deliberately knows nothing about transports, so the mapping
+ * lives here rather than on Room.
+ */
+const socketByPeer = new Map<string, WebSocket>();
+
+function broadcast(peerIds: readonly string[], msg: ServerMessage): void {
+  for (const id of peerIds) {
+    const socket = socketByPeer.get(id);
+    if (socket) send(socket, msg);
+  }
+}
+
 wss.on('connection', (socket) => {
   // An unhandled 'error' event on a socket takes the whole process down, and
   // peers dropping abruptly is routine. Log and let 'close' do the cleanup.
@@ -89,8 +103,46 @@ wss.on('connection', (socket) => {
           peerId: creator.peerId,
           createdAt: room.createdAt,
         });
+        socketByPeer.set(creator.peerId, socket);
         send(socket, rooms.toState(room));
         log('room created', { code: room.code, peers: room.peers.length });
+        return;
+      }
+
+      case 'join-room': {
+        if (peerId !== undefined) {
+          send(socket, {
+            type: 'error',
+            code: 'invalid-request',
+            message: 'This connection already belongs to a room.',
+          });
+          return;
+        }
+
+        const result = rooms.join(msg.code, msg.displayName);
+        if (!result.ok) {
+          send(socket, {
+            type: 'error',
+            code: result.reason,
+            message:
+              result.reason === 'room-not-found'
+                ? 'No room with that code. Check it and try again.'
+                : 'That room has already started playing.',
+          });
+          return;
+        }
+
+        peerId = result.peerId;
+        socketByPeer.set(peerId, socket);
+
+        send(socket, { type: 'room-joined', code: result.room.code, peerId });
+        // Everyone gets the same roster, the joiner included: one message
+        // shape means no separate "you" and "them" views to keep in step.
+        broadcast(
+          result.room.peers.map((p) => p.peerId),
+          rooms.toState(result.room),
+        );
+        log('peer joined', { code: result.room.code, peers: result.room.peers.length });
         return;
       }
     }
@@ -98,9 +150,27 @@ wss.on('connection', (socket) => {
 
   socket.on('close', () => {
     if (peerId === undefined) return;
+    socketByPeer.delete(peerId);
+
     const room = rooms.roomForPeer(peerId);
-    rooms.removePeer(peerId);
-    if (room) log('peer left', { code: room.code, rooms: rooms.size });
+    if (!room) return;
+    // Captured before removal: if this was the creator the room is deleted,
+    // and the survivors still have to be told why their roster stopped.
+    const others = room.peers.filter((p) => p.peerId !== peerId).map((p) => p.peerId);
+    const code = room.code;
+
+    const survivor = rooms.removePeer(peerId);
+    if (survivor) {
+      broadcast(others, rooms.toState(survivor));
+      log('peer left', { code, rooms: rooms.size });
+      return;
+    }
+
+    // No survivor means the room is gone. A frozen roster would look like a
+    // slow network; this says it is over.
+    broadcast(others, { type: 'room-closed', code, reason: 'creator-left' });
+    for (const id of others) socketByPeer.delete(id);
+    log('room closed', { code, rooms: rooms.size });
   });
 });
 
