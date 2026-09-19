@@ -199,7 +199,8 @@ export class Player {
    *
    * `userOffsetMs` is the listener's own nudge, for output the browser
    * cannot see the lag of — Bluetooth is 100-300ms late and says nothing.
-   * Nothing passes it yet; #9 adds the slider that does.
+   * It defaults to the last value set, so a cue arriving mid-track keeps
+   * the listener's calibration rather than silently discarding it.
    */
   apply(cue: Cue, offsetMs: number, userOffsetMs = this.#userOffsetMs): void {
     if (this.#closed) return;
@@ -235,6 +236,10 @@ export class Player {
     const driftMs = this.drift();
 
     if (Math.abs(driftMs) > DRIFT_RESEEK_MS) {
+      // This also clears any nudge in force: #play builds a fresh source,
+      // and a fresh source runs at 1. The jump has already closed the gap,
+      // so carrying the old rate over would re-open it in the other
+      // direction.
       return this.#play(this.#cue.localStartMs, this.#cue.fromSeconds);
     }
     // Ahead means slow down. Below the floor the rate goes back to 1 rather

@@ -2,8 +2,7 @@
 
 import { useId } from 'react';
 
-/** The range the slider covers, either side of zero. */
-export const OFFSET_RANGE_MS = 500;
+import { OFFSET_RANGE_MS } from '@/lib/offset';
 
 /**
  * The listener's own latency correction.

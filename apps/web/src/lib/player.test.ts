@@ -359,6 +359,21 @@ describe('drift', () => {
     assert.doesNotThrow(() => player.correct());
     assert.equal(out.sources.length, 0);
   });
+
+  it('reads zero on a cue that arrived late', () => {
+    // A late joiner starts mid-track, so the position it starts at is not
+    // the position the cue names. The two have to cancel: if the stored cue
+    // were the adjusted instant rather than the original, every late peer
+    // would come up already drifting by however late it was.
+    const out = sink(0);
+    const clock = monotonic(1000);
+    const player = new Player({ sink: out, buffer: buffer(600), now: clock.now });
+
+    player.apply({ type: 'play', startAt: 900, fromSeconds: 0 }, 0);
+
+    assert.ok(Math.abs(player.position() - 0.1) < 1e-9, `got ${player.position()}`);
+    assert.ok(Math.abs(player.drift()) < 1e-6, `got ${player.drift()}ms`);
+  });
 });
 
 describe('the user offset', () => {

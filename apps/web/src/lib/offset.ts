@@ -1,8 +1,15 @@
 'use client';
 
-import { OFFSET_RANGE_MS } from '@/components/OffsetSlider';
-
 const KEY = 'rave.userOffsetMs';
+
+/**
+ * The range the correction covers, either side of zero.
+ *
+ * Lives here rather than with the slider because it is what the stored
+ * value is clamped to: the bound has to hold for a number coming back out
+ * of storage whether or not a slider is ever rendered.
+ */
+export const OFFSET_RANGE_MS = 500;
 
 /**
  * The listener's latency correction, remembered across sessions.

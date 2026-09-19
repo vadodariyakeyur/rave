@@ -281,17 +281,27 @@ export function RoomClient() {
   }, [player]);
 
   // The audio clock and the monotonic clock diverge on their own, so a track
-  // that started in sync does not stay there. Checking costs nothing; the
-  // correction is a rate nudge until it is too far, then a reseek.
-  const [driftMs, setDriftMs] = useState(0);
+  // that started in sync does not stay there. Correcting is a rate nudge
+  // until the gap is too wide to nudge, then a reseek.
+  //
+  // Slowly on purpose: drift accumulates over minutes, and correcting on a
+  // short cadence chases measurement jitter instead.
   useEffect(() => {
     if (!player) return;
-    const timer = setInterval(() => {
-      player.correct();
-      setDriftMs(player.drift());
-    }, DRIFT_CHECK_MS);
+    const timer = setInterval(() => player.correct(), DRIFT_CHECK_MS);
     return () => clearInterval(timer);
   }, [player]);
+
+  // Read far faster than it is corrected, and only with the overlay open.
+  // Sampling on the correction cadence would show the drift exactly when it
+  // is smallest — a number that never moves, hiding the excursion between
+  // the corrections, which is the one thing the overlay exists to show.
+  const [driftMs, setDriftMs] = useState(0);
+  useEffect(() => {
+    if (!player || !debug) return;
+    const timer = setInterval(() => setDriftMs(player.drift()), 250);
+    return () => clearInterval(timer);
+  }, [player, debug]);
 
   // Lazily, because localStorage is not there during the server render.
   const [userOffsetMs, setUserOffsetMs] = useState(() => loadUserOffset());
