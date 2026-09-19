@@ -1,0 +1,8 @@
+{
+  // The build tsconfig excludes tests so they stay out of dist/. That must not
+  // cost them type coverage, so `typecheck` runs this one too.
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "noEmit": true },
+  "include": ["src"],
+  "exclude": []
+}
