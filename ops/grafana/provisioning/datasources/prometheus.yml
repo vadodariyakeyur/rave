@@ -1,6 +1,10 @@
 apiVersion: 1
 datasources:
   - name: Prometheus
+    # Pinned so the dashboard can name it. Without a uid Grafana generates
+    # one per install, and a dashboard referencing it would break the first
+    # time a second datasource became the default.
+    uid: rave-prometheus
     type: prometheus
     access: proxy
     url: http://prometheus:9090

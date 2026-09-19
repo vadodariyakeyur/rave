@@ -5,6 +5,7 @@ import {
   type ServerMessage,
 } from '@rave/protocol';
 import { RoomRegistry, type StartResult } from './rooms.ts';
+import { BarrierTimer, Metrics } from './metrics.ts';
 import { iceServers } from './ice.ts';
 
 /**
@@ -16,6 +17,16 @@ import { iceServers } from './ice.ts';
  */
 
 export const rooms = new RoomRegistry();
+
+/**
+ * The live gauges read off the registry at scrape time rather than being
+ * counted at each join and leave. A counter pair would be a second copy of
+ * the roster, and the two would drift the first time a code path forgot to
+ * decrement.
+ */
+export const metrics = new Metrics(rooms);
+
+const barrier = new BarrierTimer((seconds) => metrics.barrierWaitSeconds.observe(seconds));
 
 /** Keyed off the refusal so a new reason cannot ship without its wording. */
 const START_REFUSAL: Record<Extract<StartResult, { ok: false }>['reason'], string> = {
@@ -110,6 +121,7 @@ export function handleConnection(socket: WebSocket): void {
         });
         socketByPeer.set(creator.peerId, socket);
         send(socket, rooms.toState(room));
+        barrier.open(room.code);
         log('room created', { code: room.code, peers: room.peers.length });
         return;
       }
@@ -147,6 +159,11 @@ export function handleConnection(socket: WebSocket): void {
           result.room.peers.map((p) => p.peerId),
           rooms.toState(result.room),
         );
+        // Reopens the barrier: a joiner arrives unready, so a room that had
+        // already settled is waiting again, and that second wait is a real
+        // one. Restarting the clock is right even on the first join — the
+        // creator was alone until now, and nobody was waiting for them.
+        barrier.open(result.room.code);
         log('peer joined', { code: result.room.code, peers: result.room.peers.length });
         return;
       }
@@ -162,6 +179,7 @@ export function handleConnection(socket: WebSocket): void {
           room.peers.map((p) => p.peerId),
           rooms.toState(room),
         );
+        barrier.settle(room.code, room.peers);
         log('peer ready', { code: room.code, ready: room.peers.filter((p) => p.ready).length });
         return;
       }
@@ -197,6 +215,10 @@ export function handleConnection(socket: WebSocket): void {
           result.room.peers.map((p) => p.peerId),
           rooms.toState(result.room),
         );
+        // Forced means peers were left behind, which is the signal — a room
+        // that needed force-starting had someone who never made the barrier.
+        metrics.startsTotal.inc({ forced: String(result.excluded.length > 0) });
+        barrier.close(result.room.code);
         log('room started', {
           code: result.room.code,
           peers: result.room.peers.length,
@@ -239,6 +261,10 @@ export function handleConnection(socket: WebSocket): void {
     const result = rooms.removePeer(peerId);
     if (result.kind === 'open') {
       broadcast(others, rooms.toState(result.room));
+      // A leave can complete the barrier too: if the last unready peer is the
+      // one who left, the survivors are now all ready and nobody else will
+      // send a `ready` to trigger the check.
+      barrier.settle(result.room.code, result.room.peers);
       log('peer left', { code: result.room.code, rooms: rooms.size });
       return;
     }
@@ -246,6 +272,7 @@ export function handleConnection(socket: WebSocket): void {
 
     // The room is gone. A frozen roster would look like a slow network; this
     // says it is over, and which of the two ways it ended.
+    barrier.close(result.code);
     broadcast(others, { type: 'room-closed', code: result.code, reason: result.reason });
     for (const id of others) socketByPeer.delete(id);
     log('room closed', { code: result.code, reason: result.reason, rooms: rooms.size });

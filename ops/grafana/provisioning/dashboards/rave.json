@@ -1,0 +1,99 @@
+{
+  "uid": "rave-sync",
+  "title": "Rave — sync health",
+  "tags": ["rave"],
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "refresh": "10s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Live rooms",
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "rave-prometheus" }, "refId": "A", "expr": "rave_rooms_live", "legendFormat": "rooms" }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Live peers",
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "rave-prometheus" }, "refId": "A", "expr": "rave_peers_live", "legendFormat": "peers" }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Force-started share (1h)",
+      "description": "Of the starts in the window, the fraction that left a peer behind. Reads 0 when nothing has started — the zero-initialised label pair is what keeps this from going blank.",
+      "gridPos": { "h": 5, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 0.2 },
+              { "color": "red", "value": 0.5 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "rave-prometheus" },
+          "refId": "A",
+          "expr": "sum(increase(rave_starts_total{forced=\"true\"}[1h])) / clamp_min(sum(increase(rave_starts_total[1h])), 1)",
+          "legendFormat": "forced"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Ready-barrier wait",
+      "description": "Room creation until every peer holds the decoded file. The slowest device sets the start time for everyone, so p95 is the number that matters.",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 5 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "rave-prometheus" },
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum(rate(rave_barrier_wait_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p50"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "rave-prometheus" },
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum(rate(rave_barrier_wait_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p95"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Starts per hour",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 5 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "rave-prometheus" },
+          "refId": "A",
+          "expr": "sum by (forced) (rate(rave_starts_total[5m])) * 3600",
+          "legendFormat": "forced={{forced}}"
+        }
+      ]
+    }
+  ]
+}

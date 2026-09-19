@@ -80,6 +80,13 @@ export class RoomRegistry {
     return this.#byCode.size;
   }
 
+  /** Everyone currently in a room, across all of them. */
+  get peerCount(): number {
+    let total = 0;
+    for (const room of this.#byCode.values()) total += room.peers.length;
+    return total;
+  }
+
   create(input: CreateRoomInput): Room {
     const creator: Peer = {
       peerId: randomUUID(),

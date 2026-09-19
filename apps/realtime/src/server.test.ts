@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import type { WebSocket } from 'ws';
 import { parseServerMessage, type ServerMessage } from '@rave/protocol';
-import { handleConnection, rooms } from './server.ts';
+import { handleConnection, metrics, rooms } from './server.ts';
 
 /**
  * A socket that records what the server sent it and lets a test push a
@@ -212,5 +212,58 @@ describe('start-playback', () => {
     const before = guest.sent.length;
     assert.doesNotThrow(() => other.hangUp());
     assert.equal(guest.sent.length, before, 'the survivors hear nothing about it');
+  });
+});
+
+describe('barrier metrics', () => {
+  /** The histogram count, which only moves when a barrier is recorded. */
+  async function barriersRecorded(): Promise<number> {
+    const { body } = await metrics.render();
+    return Number(/^rave_barrier_wait_seconds_count (\d+)$/m.exec(body)?.[1] ?? -1);
+  }
+
+  it('records the wait when the last peer readies', async () => {
+    const before = await barriersRecorded();
+    const { host, guest } = pair();
+    guest.receive({ type: 'ready' });
+
+    assert.equal(await barriersRecorded(), before + 1);
+    host.hangUp();
+    guest.hangUp();
+  });
+
+  it('records the wait when the last unready peer leaves instead', async () => {
+    // The survivors are all ready and nobody will send another `ready`, so
+    // the leave path is the only place left to notice the barrier closed.
+    const before = await barriersRecorded();
+    const { host, guest, code } = pair();
+
+    const other = connect();
+    other.receive({ type: 'join-room', code, displayName: 'Alex' });
+    guest.receive({ type: 'ready' });
+    assert.equal(await barriersRecorded(), before, 'not all ready yet');
+
+    other.hangUp();
+
+    assert.equal(await barriersRecorded(), before + 1);
+    host.hangUp();
+    guest.hangUp();
+  });
+
+  it('reopens the barrier when someone joins after it settled', async () => {
+    // A settled room that gains an unready peer is waiting again, and that
+    // second wait has to be recorded too.
+    const { host, guest, code } = pair();
+    guest.receive({ type: 'ready' });
+    const afterFirst = await barriersRecorded();
+
+    const other = connect();
+    other.receive({ type: 'join-room', code, displayName: 'Alex' });
+    other.receive({ type: 'ready' });
+
+    assert.equal(await barriersRecorded(), afterFirst + 1);
+    host.hangUp();
+    guest.hangUp();
+    other.hangUp();
   });
 });

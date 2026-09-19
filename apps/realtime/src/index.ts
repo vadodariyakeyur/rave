@@ -1,10 +1,29 @@
 import { createServer } from 'node:http';
 import { WebSocketServer } from 'ws';
-import { handleConnection } from './server.ts';
+import { handleConnection, metrics } from './server.ts';
 
 const PORT = Number(process.env['PORT'] ?? 8080);
 
 const server = createServer((req, res) => {
+  if (req.url === '/metrics') {
+    // Async because the gauges collect off the registry on the way out.
+    // Failing the scrape with a 500 is right: an empty 200 reads as a live
+    // service reporting zero rooms, which is the wrong alarm.
+    metrics
+      .render()
+      .then(({ body, contentType }) => {
+        res.writeHead(200, { 'content-type': contentType });
+        res.end(body);
+      })
+      .catch((err: unknown) => {
+        console.error(
+          JSON.stringify({ msg: 'metrics failed', error: String(err), at: new Date().toISOString() }),
+        );
+        res.writeHead(500).end();
+      });
+    return;
+  }
+
   if (req.url === '/healthz') {
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ ok: true, at: new Date().toISOString() }));

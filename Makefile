@@ -63,7 +63,7 @@ test: ## Run every test suite
 	pnpm -r --no-bail test
 
 metrics: ## Open the Grafana dashboard
-	@open http://localhost:3001 2>/dev/null || xdg-open http://localhost:3001 2>/dev/null || echo "Grafana: http://localhost:3001"
+	@open $(DASHBOARD_URL) 2>/dev/null || xdg-open $(DASHBOARD_URL) 2>/dev/null || echo "Grafana: $(DASHBOARD_URL)"
 
 clean: ## Tear down containers, volumes and build artifacts
 	$(COMPOSE) down -v --remove-orphans
