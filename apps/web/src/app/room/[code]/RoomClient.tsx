@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
 import { getSession, patchSession, subscribeSession, type Session } from '@/lib/session';
@@ -254,22 +254,52 @@ export function RoomClient() {
   // zero. Two paths here would be two chances to schedule differently.
   const audioContext = session?.audioContext;
   const buffer = session?.buffer;
-  const playerRef = useRef<Player | undefined>(undefined);
+  // Derived, not held in a ref: the auto-start effect below has to fire when
+  // the player appears, and a ref cannot be a dependency.
+  //
+  // Gone when the room ends, not just when the audio does: once the creator
+  // is gone there is no shared clock, so a track still running is a track
+  // drifting alone behind a banner saying the room is over.
+  const player = useMemo(
+    () => (audioContext && buffer && !ended ? new Player({ sink: audioContext, buffer }) : undefined),
+    [audioContext, buffer, ended],
+  );
   const [playback, setPlayback] = useState<PlayerState>({
     playing: false,
     positionSeconds: 0,
   });
   useEffect(() => {
-    if (!audioContext || !buffer) return;
-    const player = new Player({ sink: audioContext, buffer });
-    playerRef.current = player;
+    if (!player) return;
     const unsubscribe = player.subscribe(() => setPlayback(player.state()));
     return () => {
       unsubscribe();
       player.close();
-      playerRef.current = undefined;
     };
-  }, [audioContext, buffer]);
+  }, [player]);
+
+  /**
+   * Cue every peer, and ourselves, off one instant on our own clock.
+   *
+   * The creator is the reference, so the instant it sends is already in the
+   * clock every peer measured itself against — no conversion here, all of it
+   * on the receiving side. One path for the first play and for every pause
+   * and resume after it: a second spelling is a second way to drift.
+   */
+  const cue = useCallback(
+    (make: (at: number) => Cue) => {
+      const at = performance.now() + START_LEAD_MS;
+      const message = make(at);
+      if (mesh) {
+        broadcastCue(
+          mesh,
+          (peers ?? []).filter((p) => p.peerId !== selfPeerId).map((p) => p.peerId),
+          message,
+        );
+      }
+      player?.apply(message, 0);
+    },
+    [mesh, peers, selfPeerId, player],
+  );
 
   // The measured offset, read at cue time rather than depended on: it
   // re-measures every few seconds, and restarting this effect on each round
@@ -282,10 +312,8 @@ export function RoomClient() {
   // A joiner listens; the creator has nobody to listen to.
   useEffect(() => {
     if (!mesh || ended || isCreator || !creatorId) return;
-    return listenForCues(mesh, creatorId, (cue) =>
-      playerRef.current?.apply(cue, offsetRef.current),
-    );
-  }, [mesh, isCreator, creatorId, ended]);
+    return listenForCues(mesh, creatorId, (cue) => player?.apply(cue, offsetRef.current));
+  }, [mesh, isCreator, creatorId, ended, player]);
 
   // The first cue fires when the server confirms the lock, not when the
   // button is tapped: the lock is what settles who is actually in the room,
@@ -297,15 +325,10 @@ export function RoomClient() {
   const locked = session?.state.locked ?? false;
   const started = useRef(false);
   useEffect(() => {
-    if (!isCreator || !locked || !mesh || started.current) return;
-    if (!playerRef.current) return;
+    if (!isCreator || !locked || !player || started.current) return;
     started.current = true;
-    const at = performance.now() + START_LEAD_MS;
-    const cue: Cue = { type: 'play', startAt: at, fromSeconds: 0 };
-    broadcastCue(mesh, peers?.filter((p) => p.peerId !== selfPeerId).map((p) => p.peerId) ?? [], cue);
-    // Offset zero: the creator is the clock everyone else measured against.
-    playerRef.current.apply(cue, 0);
-  }, [isCreator, locked, mesh, peers, selfPeerId]);
+    cue((at) => ({ type: 'play', startAt: at, fromSeconds: 0 }));
+  }, [isCreator, locked, player, cue]);
 
   // The creator keeps the room alive by staying visible. Neither of these
   // prevents a backgrounded tab — they make it visible and less likely.
@@ -337,32 +360,12 @@ export function RoomClient() {
   const notReady = state.peers.filter((p) => !p.ready);
   const start = (force: boolean) => session.signaling.send({ type: 'start-playback', force });
 
-  /**
-   * Cue every peer, and ourselves, off one instant on our own clock.
-   *
-   * The creator is the reference, so the instant it sends is already in the
-   * clock every peer measured itself against — no conversion here, all of it
-   * on the receiving side.
-   */
-  const cue = (make: (at: number) => Cue) => {
-    const at = performance.now() + START_LEAD_MS;
-    const message = make(at);
-    if (mesh) {
-      broadcastCue(
-        mesh,
-        state.peers.filter((p) => p.peerId !== session.peerId).map((p) => p.peerId),
-        message,
-      );
-    }
-    playerRef.current?.apply(message, 0);
-  };
-
   const play = () =>
     cue((at) => ({
       type: 'play',
       startAt: at,
       // Zero on a first play; where we paused on a resume.
-      fromSeconds: playerRef.current?.position() ?? 0,
+      fromSeconds: player?.position() ?? 0,
     }));
   const pause = () => cue((at) => ({ type: 'pause', pauseAt: at }));
 

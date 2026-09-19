@@ -150,6 +150,10 @@ export class Player {
    * creator's, so subtract it to bring the creator's instant back to ours.
    * It is zero for the creator itself, which is why there is one path here
    * and not two.
+   *
+   * `userOffsetMs` is the listener's own nudge, for output the browser
+   * cannot see the lag of — Bluetooth is 100-300ms late and says nothing.
+   * Nothing passes it yet; #9 adds the slider that does.
    */
   apply(cue: Cue, offsetMs: number, userOffsetMs = 0): void {
     if (this.#closed) return;
