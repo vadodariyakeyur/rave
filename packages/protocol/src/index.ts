@@ -12,11 +12,33 @@ import { z } from 'zod';
 
 export const PROTOCOL_VERSION = 1;
 
-/** Server -> client. Confirms the socket is live and the protocol matches. */
+/**
+ * ICE servers, as RTCPeerConnection wants them.
+ *
+ * Shaped to RTCIceServer rather than a bare url list because phase 2 adds
+ * TURN, which needs credentials — a list of strings would have to be
+ * replaced, and this only has to be filled in.
+ */
+export const IceServer = z.object({
+  urls: z.union([z.string(), z.array(z.string())]),
+  username: z.string().optional(),
+  credential: z.string().optional(),
+});
+export type IceServer = z.infer<typeof IceServer>;
+
+/**
+ * Server -> client. Confirms the socket is live and the protocol matches.
+ *
+ * Carries the ICE list because the alternative, NEXT_PUBLIC_*, is baked into
+ * the bundle at build time: changing a STUN server would mean rebuilding the
+ * web image. Here it is a restart of `realtime`, and it rides a message every
+ * socket already receives first.
+ */
 export const ServerHello = z.object({
   type: z.literal('server-hello'),
   protocolVersion: z.literal(PROTOCOL_VERSION),
   serverTime: z.iso.datetime(),
+  iceServers: z.array(IceServer),
 });
 export type ServerHello = z.infer<typeof ServerHello>;
 
@@ -91,6 +113,31 @@ export const JoinRoom = z.object({
 });
 export type JoinRoom = z.infer<typeof JoinRoom>;
 
+/**
+ * Client -> server, then server -> client, relayed to one named peer.
+ *
+ * The payload is opaque on purpose: it carries SDP and ICE candidates whose
+ * shape belongs to the browser, and mirroring RTCSessionDescriptionInit in
+ * zod would be a second definition to keep in step for no safety gained —
+ * the server never reads it, it only forwards it.
+ *
+ * `to` on the way in, `from` on the way out, and the server stamps `from`
+ * itself so a peer cannot claim to be someone else.
+ */
+export const Signal = z.object({
+  type: z.literal('signal'),
+  to: z.uuid(),
+  data: z.unknown(),
+});
+export type Signal = z.infer<typeof Signal>;
+
+export const SignalFrom = z.object({
+  type: z.literal('signal'),
+  from: z.uuid(),
+  data: z.unknown(),
+});
+export type SignalFrom = z.infer<typeof SignalFrom>;
+
 /** Server -> client. The room exists; this is its code. */
 export const RoomCreated = z.object({
   type: z.literal('room-created'),
@@ -137,12 +184,12 @@ export type RoomClosed = z.infer<typeof RoomClosed>;
 /** Server -> client. Something the person needs to see, in their words. */
 export const ErrorMessage = z.object({
   type: z.literal('error'),
-  code: z.enum(['room-not-found', 'room-locked', 'invalid-request']),
+  code: z.enum(['room-not-found', 'room-locked', 'invalid-request', 'peer-not-found']),
   message: z.string().min(1).max(200),
 });
 export type ErrorMessage = z.infer<typeof ErrorMessage>;
 
-export const ClientMessage = z.discriminatedUnion('type', [Ping, CreateRoom, JoinRoom]);
+export const ClientMessage = z.discriminatedUnion('type', [Ping, CreateRoom, JoinRoom, Signal]);
 export type ClientMessage = z.infer<typeof ClientMessage>;
 
 export const ServerMessage = z.discriminatedUnion('type', [
@@ -152,6 +199,7 @@ export const ServerMessage = z.discriminatedUnion('type', [
   RoomJoined,
   RoomState,
   RoomClosed,
+  SignalFrom,
   ErrorMessage,
 ]);
 export type ServerMessage = z.infer<typeof ServerMessage>;

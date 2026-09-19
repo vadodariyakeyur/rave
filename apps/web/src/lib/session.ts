@@ -1,6 +1,6 @@
 'use client';
 
-import { RoomCode, type RoomClosed, type RoomState } from '@rave/protocol';
+import { RoomCode, type IceServer, type RoomClosed, type RoomState } from '@rave/protocol';
 import { armAudio, decodeFile, type DecodedTrack } from './audio';
 import { Signaling } from './signaling';
 
@@ -26,6 +26,11 @@ export interface Session {
   peerId: string;
   code: string;
   state: RoomState;
+  /**
+   * From server-hello, so a STUN change is a restart of `realtime` rather
+   * than a rebuild of the web image.
+   */
+  iceServers: IceServer[];
   /**
    * Why the room ended, if it has. 'lost-connection' is our own socket
    * dropping, which is not the same event as the room closing — telling
@@ -94,8 +99,13 @@ export async function createRoom(input: {
     // room-state. Neither alone is enough: the roster does not say which peer
     // we are, and room-created does not carry the roster.
     let peerId: string | undefined;
+    let iceServers: IceServer[] = [];
     const unsubscribeMessage = signaling.onMessage((msg) => {
       if (msg.type === 'error') return void settle(new Error(msg.message));
+      if (msg.type === 'server-hello') {
+        iceServers = msg.iceServers;
+        return;
+      }
       if (msg.type === 'room-created') {
         peerId = msg.peerId;
         return;
@@ -110,6 +120,7 @@ export async function createRoom(input: {
         peerId,
         code: msg.code,
         state: msg,
+        iceServers,
       };
       setSession(session);
       resolve(session);
@@ -169,8 +180,13 @@ export async function joinRoom(input: { code: string; displayName: string }): Pr
     // room-joined carries our peerId, room-state the roster. Same two-message
     // handshake as create, for the same reason: neither is enough alone.
     let peerId: string | undefined;
+    let iceServers: IceServer[] = [];
     const unsubscribeMessage = signaling.onMessage((msg) => {
       if (msg.type === 'error') return void settle(new Error(msg.message));
+      if (msg.type === 'server-hello') {
+        iceServers = msg.iceServers;
+        return;
+      }
       if (msg.type === 'room-joined') {
         peerId = msg.peerId;
         return;
@@ -183,6 +199,7 @@ export async function joinRoom(input: { code: string; displayName: string }): Pr
         peerId,
         code: msg.code,
         state: msg,
+        iceServers,
       };
       setSession(session);
       resolve(session);

@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useParams } from 'next/navigation';
 import { getSession, patchSession, subscribeSession, type Session } from '@/lib/session';
 import { Roster } from '@/components/Roster';
+import { Mesh, type PeerConnectionState } from '@/lib/mesh';
 import { PreJoin } from './PreJoin';
 
 export function RoomClient() {
@@ -28,6 +29,47 @@ export function RoomClient() {
       unsubscribeClose();
     };
   }, [signaling]);
+
+  // The mesh outlives any single render but dies with the socket, so it is
+  // created alongside the same effect that owns the socket's listeners.
+  const mesh = useRef<Mesh | undefined>(undefined);
+  const [connections, setConnections] = useState<ReadonlyMap<string, PeerConnectionState>>(
+    new Map(),
+  );
+  const selfPeerId = session?.peerId;
+  const iceServers = session?.iceServers;
+  useEffect(() => {
+    if (!signaling || !selfPeerId || !iceServers) return;
+    const created = new Mesh({ signaling, selfPeerId, iceServers });
+    mesh.current = created;
+    // A new Map each time: the mesh mutates its own in place, and React
+    // would skip a render on an unchanged reference.
+    const unsubscribe = created.subscribe(() => setConnections(new Map(created.states())));
+    return () => {
+      unsubscribe();
+      created.close();
+      mesh.current = undefined;
+    };
+  }, [signaling, selfPeerId, iceServers]);
+
+  // Reconcile on every roster change, including the first: the roster is the
+  // server's own truth about who is in the room, so a missed event cannot
+  // leave a phantom peer connected.
+  const peers = session?.state.peers;
+  const ended = session?.ended;
+  useEffect(() => {
+    if (!peers) return;
+    // A room that has ended has no peers left to hold open. close() also stops
+    // the mesh listening, so it is dropped rather than left reachable: 'ended'
+    // includes a dropped socket, and a later roster would otherwise sync onto
+    // a deaf mesh and open connections that can never be signalled.
+    if (ended) {
+      mesh.current?.close();
+      mesh.current = undefined;
+      return;
+    }
+    mesh.current?.sync(peers);
+  }, [peers, ended]);
 
   // No session means a refresh or a pasted link — the tap that arms audio has
   // not happened, so this is where it happens.
@@ -62,7 +104,7 @@ export function RoomClient() {
           <h2 className="text-sm font-medium text-[var(--color-muted-foreground)]">
             In the room
           </h2>
-          <Roster peers={state.peers} selfPeerId={session.peerId} />
+          <Roster peers={state.peers} selfPeerId={session.peerId} connections={connections} />
         </section>
       )}
     </main>

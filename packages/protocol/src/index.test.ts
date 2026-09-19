@@ -17,6 +17,7 @@ test('parses a valid server message', () => {
     type: 'server-hello',
     protocolVersion: PROTOCOL_VERSION,
     serverTime: '2026-09-19T12:00:00.000Z',
+    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
   });
   assert.equal(parseServerMessage(raw)?.type, 'server-hello');
 });
@@ -221,4 +222,60 @@ describe('server room messages', () => {
       null,
     );
   });
+  it('relays a signal with an opaque payload', () => {
+    // The server must not care what is inside: an SDP blob today, whatever
+    // the browser sends tomorrow.
+    const msg = parseClientMessage(
+      JSON.stringify({
+        type: 'signal',
+        to: '6f1b3c7e-4f3a-4b2e-8f1a-2c3d4e5f6a7b',
+        data: { sdp: 'v=0...', type: 'offer' },
+      }),
+    );
+    assert.equal(msg?.type, 'signal');
+  });
+
+  it('rejects a signal addressed to something that is not a peer id', () => {
+    assert.equal(
+      parseClientMessage(JSON.stringify({ type: 'signal', to: 'everyone', data: {} })),
+      null,
+    );
+  });
+
+  it('parses an inbound signal stamped with its sender', () => {
+    const msg = parseServerMessage(
+      JSON.stringify({
+        type: 'signal',
+        from: '6f1b3c7e-4f3a-4b2e-8f1a-2c3d4e5f6a7b',
+        data: null,
+      }),
+    );
+    assert.equal(msg?.type === 'signal' && msg.from, '6f1b3c7e-4f3a-4b2e-8f1a-2c3d4e5f6a7b');
+  });
+
+});
+
+test('carries an ice server list with optional turn credentials', () => {
+  // TURN lands in phase 2 and needs credentials; the shape has to already
+  // hold them or the message changes under a deployed client.
+  const raw = JSON.stringify({
+    type: 'server-hello',
+    protocolVersion: PROTOCOL_VERSION,
+    serverTime: '2026-09-19T12:00:00.000Z',
+    iceServers: [{ urls: ['turn:t:3478'], username: 'u', credential: 'p' }],
+  });
+  const msg = parseServerMessage(raw);
+  assert.equal(msg?.type, 'server-hello');
+  assert.deepEqual(msg.iceServers[0], { urls: ['turn:t:3478'], username: 'u', credential: 'p' });
+});
+
+test('rejects a server-hello with no ice server list at all', () => {
+  // An absent list is a server that forgot to send one; an empty list is a
+  // deliberate host-candidates-only deployment. They must not be the same.
+  const raw = JSON.stringify({
+    type: 'server-hello',
+    protocolVersion: PROTOCOL_VERSION,
+    serverTime: '2026-09-19T12:00:00.000Z',
+  });
+  assert.equal(parseServerMessage(raw), null);
 });

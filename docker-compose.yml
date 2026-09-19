@@ -16,6 +16,10 @@ services:
     expose: ["8080"]
     environment:
       PORT: 8080
+      # Comma-separated. Served to browsers in server-hello, so changing it
+      # is a restart of this service rather than a rebuild of the web image.
+      # Empty means host candidates only — valid on a single LAN.
+      ICE_SERVERS: ${ICE_SERVERS-stun:stun.l.google.com:19302}
 
   caddy:
     image: caddy:2.10-alpine
