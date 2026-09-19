@@ -1,17 +1,22 @@
 'use client';
 
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
 import { getSession, patchSession, subscribeSession, type Session } from '@/lib/session';
 import { Roster } from '@/components/Roster';
 import { Mesh, type PeerConnectionState } from '@/lib/mesh';
 import { Distributor, Receiver } from '@/lib/distribute';
 import type { Transfer } from '@/lib/transfer';
+import { ClockProbe, serveClock, type Estimate } from '@/lib/clock';
+import { DebugOverlay } from '@/components/DebugOverlay';
 import { Button } from '@/components/ui/button';
 import { PreJoin } from './PreJoin';
 
 export function RoomClient() {
   const params = useParams<{ code: string }>();
+  // The overlay is absent without the param, not hidden: it re-renders several
+  // times a second and has no business existing in a normal session.
+  const debug = useSearchParams()?.get('debug') === '1';
   const session = useSyncExternalStore(subscribeSession, getSession, () => undefined);
 
   // Keyed on the socket, not the session: patchSession replaces the session
@@ -141,6 +146,51 @@ export function RoomClient() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mesh, isCreator, creatorId, selfPeerId, ended]);
 
+  // The clock. The creator is the reference and only answers; every joiner
+  // measures itself against them. Keyed on the mesh like the transfers above,
+  // so a roster change does not restart a round mid-flight.
+  useEffect(() => {
+    if (!mesh || ended || !isCreator) return;
+    // A channel opens after its peer is already in the roster, so this
+    // re-runs on every mesh notify and attaches to whatever is newly open.
+    const served = new Map<string, () => void>();
+    const attach = () => {
+      for (const [peerId] of mesh.states()) {
+        if (served.has(peerId)) continue;
+        const channel = mesh.channel(peerId);
+        if (!channel) continue;
+        served.set(peerId, serveClock(channel));
+      }
+    };
+    attach();
+    const unsubscribe = mesh.subscribe(attach);
+    return () => {
+      unsubscribe();
+      for (const stop of served.values()) stop();
+    };
+  }, [mesh, isCreator, ended]);
+
+  const [estimate, setEstimate] = useState<Estimate | undefined>(undefined);
+  useEffect(() => {
+    if (!mesh || ended || isCreator || !creatorId) return;
+    let probe: ClockProbe | undefined;
+    const attach = () => {
+      if (probe) return;
+      const channel = mesh.channel(creatorId);
+      if (!channel) return;
+      probe = new ClockProbe(channel);
+      probe.subscribe(() => setEstimate(probe?.estimate()));
+      probe.start();
+    };
+    attach();
+    const unsubscribe = mesh.subscribe(attach);
+    return () => {
+      unsubscribe();
+      probe?.close();
+      setEstimate(undefined);
+    };
+  }, [mesh, isCreator, creatorId, ended]);
+
   // No session means a refresh or a pasted link — the tap that arms audio has
   // not happened, so this is where it happens.
   const code = params?.code?.toUpperCase();
@@ -155,6 +205,14 @@ export function RoomClient() {
 
   return (
     <main className="mx-auto flex min-h-dvh max-w-md flex-col gap-8 p-8">
+      {debug && (
+        <DebugOverlay
+          estimate={estimate}
+          connections={connections}
+          selfPeerId={session.peerId}
+          isCreator={isCreator}
+        />
+      )}
       <header className="flex flex-col gap-1">
         <p className="text-sm text-[var(--color-muted-foreground)]">{state.roomName}</p>
         <h1 className="font-mono text-4xl font-semibold tracking-[0.2em]">{state.code}</h1>
