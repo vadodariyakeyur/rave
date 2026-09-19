@@ -13,6 +13,7 @@ import { ClockProbe, serveClock, type Estimate } from '@/lib/clock';
 import {
   broadcastCue,
   DRIFT_CHECK_MS,
+  POSITION_TICK_MS,
   listenForCues,
   Player,
   START_LEAD_MS,
@@ -23,6 +24,7 @@ import { loadUserOffset, saveUserOffset } from '@/lib/offset';
 import { keepAwake, onHidden } from '@/lib/wake';
 import { DebugOverlay } from '@/components/DebugOverlay';
 import { OffsetSlider } from '@/components/OffsetSlider';
+import { TrackProgress, formatDuration } from '@/components/TrackProgress';
 import { Button } from '@/components/ui/button';
 import { ForceStartDialog } from '@/components/ForceStartDialog';
 import { PreJoin } from './PreJoin';
@@ -280,6 +282,16 @@ export function RoomClient() {
     };
   }, [player]);
 
+  // Position is derived from the audio clock rather than pushed, so nothing
+  // notifies when it moves — without a tick the bar sits still between cues.
+  // Only while playing: a paused track cannot change position, so polling it
+  // would re-render the room several times a second to redraw the same bar.
+  useEffect(() => {
+    if (!player || !playback.playing) return;
+    const timer = setInterval(() => setPlayback(player.state()), POSITION_TICK_MS);
+    return () => clearInterval(timer);
+  }, [player, playback.playing]);
+
   // The audio clock and the monotonic clock diverge on their own, so a track
   // that started in sync does not stay there. Correcting is a rate nudge
   // until the gap is too wide to nudge, then a reseek.
@@ -441,6 +453,16 @@ export function RoomClient() {
           <h2 className="text-sm font-medium text-[var(--color-muted-foreground)]">
             In the room
           </h2>
+          {/* Once the room is locked there is a track to be somewhere in.
+              Shown to listeners too, not just the creator: it is the only
+              sign a peer has that their silent device is in fact playing. */}
+          {state.locked && session.buffer && (
+            <TrackProgress
+              positionSeconds={playback.positionSeconds}
+              durationSeconds={session.buffer.duration}
+              playing={playback.playing}
+            />
+          )}
           <Roster
             peers={state.peers}
             selfPeerId={session.peerId}
@@ -499,8 +521,3 @@ const ENDED_MESSAGE: Record<NonNullable<Session['ended']>, string> = {
   'lost-connection': 'Lost the connection to this room. Check the network and rejoin.',
   excluded: 'The room started without you. Your download had not finished in time.',
 };
-
-function formatDuration(seconds: number): string {
-  const whole = Math.round(seconds);
-  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`;
-}

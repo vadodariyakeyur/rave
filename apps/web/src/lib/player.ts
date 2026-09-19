@@ -38,6 +38,16 @@ export const START_LEAD_MS = 500;
 export const DRIFT_CHECK_MS = 10_000;
 
 /**
+ * How often the progress bar re-reads the position.
+ *
+ * Fast enough that the bar moves smoothly and the seconds tick over on
+ * time, slow enough to stay off the drift-correction cadence: position is
+ * derived from the audio clock, so reading it more often than the eye can
+ * resolve just re-renders the room for nothing.
+ */
+export const POSITION_TICK_MS = 250;
+
+/**
  * Drift small enough to ignore.
  *
  * Every correction is a pitch change, so the floor has to sit above the
