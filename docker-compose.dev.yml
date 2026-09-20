@@ -11,6 +11,10 @@ services:
     environment:
       NODE_ENV: development
       WATCHPACK_POLLING: "true"
+      # The dev server blocks cross-origin /_next/hmr, and a phone joining by
+      # LAN IP is cross-origin. next.config.ts feeds this to allowedDevOrigins
+      # so the client runtime hydrates there; without it the forms are dead.
+      RAVE_HOST: ${RAVE_HOST:-localhost}
     volumes:
       - ./apps/web/src:/repo/apps/web/src
       - ./apps/web/public:/repo/apps/web/public

@@ -16,8 +16,20 @@
 	default_sni {$RAVE_HOST:localhost}
 }
 
-https://{$RAVE_HOST:localhost}, https://localhost, https://127.0.0.1 {
-	tls internal
+# Deliberately a catch-all rather than a list of addresses. DHCP moves the
+# host's LAN IP, and an explicit list only ever matches the IP that was
+# current when the container was recreated — afterwards Caddy matches no site
+# and answers an empty 200, which is a blank page on the phone. Matching on
+# any host keeps the LAN URL working across a lease change; `tls internal`
+# below still needs the specific IP, which is what RAVE_HOST is for.
+:443 {
+	# on_demand so the internal CA mints a cert for whichever IP the device
+	# actually connected to, at handshake time, instead of only the one baked
+	# in when the container started. Safe here because this listener is only
+	# ever reachable from the LAN. A new IP costs one fresh trust warning.
+	tls internal {
+		on_demand
+	}
 
 	handle /ws* {
 		reverse_proxy realtime:8080

@@ -397,14 +397,21 @@ export function RoomClient() {
   // button is tapped: the lock is what settles who is actually in the room,
   // and a cue sent a moment earlier would name peers about to be excluded.
   //
-  // Once only. The roster changes after the lock too — an excluded peer
-  // leaving is a roster change — and recueing then would restart the track
-  // from the top for everyone still listening.
+  // Once per player, not once ever. The roster changes after the lock too —
+  // an excluded peer leaving is a roster change — and recueing then would
+  // restart the track from the top for everyone still listening.
+  //
+  // Keyed on the player rather than a boolean because the effect below owns
+  // `player.close()`: anything that unmounts this component after the cue
+  // (Strict Mode's remount in dev, most visibly) stops the creator's source
+  // and builds a fresh player, and a boolean would latch that first cue and
+  // leave the creator silent while every peer — who re-applies the cue it
+  // received — plays on. The joiner's equivalent repair is `pendingCue`.
   const locked = session?.state.locked ?? false;
-  const started = useRef(false);
+  const cuedPlayer = useRef<Player | undefined>(undefined);
   useEffect(() => {
-    if (!isCreator || !locked || !player || started.current) return;
-    started.current = true;
+    if (!isCreator || !locked || !player || cuedPlayer.current === player) return;
+    cuedPlayer.current = player;
     cue((at) => ({ type: 'play', startAt: at, fromSeconds: 0 }));
   }, [isCreator, locked, player, cue]);
 

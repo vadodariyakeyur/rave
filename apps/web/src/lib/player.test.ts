@@ -497,6 +497,35 @@ describe('lifecycle', () => {
     player.apply({ type: 'play', startAt: 0, fromSeconds: 0 }, 0);
     assert.equal(out.sources.length, 1);
   });
+
+  it('re-cues the creator onto the player that replaced a closed one', () => {
+    // RoomClient owns `player.close()` in the same effect that subscribes, so
+    // anything remounting the room after the auto-start cue (Strict Mode in
+    // dev, most visibly) leaves a dead player behind. The creator's guard is
+    // therefore keyed on the player instance, not a boolean: a boolean latches
+    // that first cue and the creator stays silent while every peer plays on.
+    const cued = (() => {
+      let last: Player | undefined;
+      return (player: Player) => {
+        if (last === player) return false;
+        last = player;
+        return true;
+      };
+    })();
+
+    const out = sink(0);
+    const first = new Player({ sink: out, buffer: buffer(60), now: monotonic(0).now });
+    assert.equal(cued(first), true, 'the first player is cued');
+    first.apply({ type: 'play', startAt: 0, fromSeconds: 0 }, 0);
+    assert.equal(cued(first), false, 'a roster change must not restart the track');
+
+    // The remount: the old player is closed, a fresh one takes its place.
+    first.close();
+    const second = new Player({ sink: out, buffer: buffer(60), now: monotonic(0).now });
+    assert.equal(cued(second), true, 'the replacement player is cued');
+    second.apply({ type: 'play', startAt: 0, fromSeconds: 0 }, 0);
+    assert.equal(second.state().playing, true, 'the creator is audible after a remount');
+  });
 });
 
 /** A channel that records what went down it and can be delivered into. */
