@@ -33,6 +33,7 @@ import { OffsetSlider } from '@/components/OffsetSlider';
 import { TrackProgress, formatDuration } from '@/components/TrackProgress';
 import { Button } from '@/components/ui/button';
 import { ForceStartDialog } from '@/components/ForceStartDialog';
+import { JoinQr } from '@/components/JoinQr';
 import { PreJoin } from './PreJoin';
 
 export function RoomClient() {
@@ -430,6 +431,26 @@ export function RoomClient() {
     };
   }, [isCreator, ended]);
 
+  // Read from the browser rather than built from a configured host: the
+  // right link is whatever origin this tab was actually opened on, which is
+  // the LAN URL when the creator used the one `make dev` printed. A phone
+  // scanning a `localhost` code reaches nothing, and showing that plainly is
+  // the honest signal that the creator opened the wrong URL — a baked-in
+  // NEXT_PUBLIC host would instead go stale the next time DHCP moves the IP.
+  //
+  // Through a store subscription rather than an effect because there is no
+  // `window` during the server render: this is a read of an external value
+  // with a server snapshot, which is exactly what the hook is for.
+  const joinUrl = useSyncExternalStore(
+    // Never changes for the life of this mount — a navigation remounts the
+    // route — so the subscribe is a no-op rather than a listener nobody fires.
+    () => () => {},
+    () => window.location.href,
+    // The server has no location, and rendering a QR to a guessed host would
+    // be worse than rendering none: undefined hides it until hydration.
+    () => undefined,
+  );
+
   // No session means a refresh or a pasted link — the tap that arms audio has
   // not happened, so this is where it happens.
   const code = params?.code?.toUpperCase();
@@ -473,6 +494,14 @@ export function RoomClient() {
           <p className="text-sm text-[var(--color-muted-foreground)]">
             {session.fileName} · {formatDuration(session.buffer.duration)}
           </p>
+        )}
+        {/* Only while the room still takes joins, and only once the origin is
+            known. A locked room refuses new peers, so the code below it is the
+            record of which room this is, not an invitation. */}
+        {!state.locked && !session.ended && joinUrl && (
+          <div className="mt-3">
+            <JoinQr url={joinUrl} />
+          </div>
         )}
       </header>
 
