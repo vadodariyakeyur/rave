@@ -498,33 +498,36 @@ describe('lifecycle', () => {
     assert.equal(out.sources.length, 1);
   });
 
-  it('re-cues the creator onto the player that replaced a closed one', () => {
-    // RoomClient owns `player.close()` in the same effect that subscribes, so
-    // anything remounting the room after the auto-start cue (Strict Mode in
-    // dev, most visibly) leaves a dead player behind. The creator's guard is
-    // therefore keyed on the player instance, not a boolean: a boolean latches
-    // that first cue and the creator stays silent while every peer plays on.
-    const cued = (() => {
-      let last: Player | undefined;
-      return (player: Player) => {
-        if (last === player) return false;
-        last = player;
-        return true;
-      };
-    })();
-
+  it('keeps the creator audible when the player is rebuilt', () => {
+    // The bug this pins: RoomClient used to build the Player in a useMemo and
+    // close it in an effect keyed on that memo. A memo is a cache, not an
+    // owner — React may recompute it — and each recompute closed the instance
+    // that `cue` had already captured, so the creator's own cues landed on a
+    // closed player and were dropped, silently, while peers played on.
+    //
+    // Ownership now sits in one effect, modelled here: whoever builds the
+    // player is whoever closes it, and cues always go to the live one.
     const out = sink(0);
-    const first = new Player({ sink: out, buffer: buffer(60), now: monotonic(0).now });
-    assert.equal(cued(first), true, 'the first player is cued');
-    first.apply({ type: 'play', startAt: 0, fromSeconds: 0 }, 0);
-    assert.equal(cued(first), false, 'a roster change must not restart the track');
+    const track = buffer(60);
+    let live: Player | undefined;
+    const build = () => {
+      live?.close();
+      live = new Player({ sink: out, buffer: track, now: monotonic(0).now });
+      return live;
+    };
 
-    // The remount: the old player is closed, a fresh one takes its place.
-    first.close();
-    const second = new Player({ sink: out, buffer: buffer(60), now: monotonic(0).now });
-    assert.equal(cued(second), true, 'the replacement player is cued');
+    const first = build();
+    first.apply({ type: 'play', startAt: 0, fromSeconds: 0 }, 0);
+    assert.equal(first.state().playing, true, 'the first player plays');
+
+    // The rebuild. A stale capture of `first` is now deaf — that is correct,
+    // and is exactly why the component must not hold one.
+    const second = build();
+    first.apply({ type: 'play', startAt: 0, fromSeconds: 0 }, 0);
+    assert.equal(first.state().playing, false, 'the closed player stays closed');
+
     second.apply({ type: 'play', startAt: 0, fromSeconds: 0 }, 0);
-    assert.equal(second.state().playing, true, 'the creator is audible after a remount');
+    assert.equal(second.state().playing, true, 'the creator is audible after a rebuild');
   });
 });
 

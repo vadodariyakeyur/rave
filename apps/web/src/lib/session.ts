@@ -3,6 +3,7 @@
 import { RoomCode, type IceServer, type RoomClosed, type RoomState } from '@rave/protocol';
 import { armAudio, decodeBytes, type DecodedTrack } from './audio';
 import { Signaling } from './signaling';
+import { Player } from './player';
 
 /**
  * The live room, held outside React.
@@ -50,12 +51,46 @@ let current: Session | undefined;
 const listeners = new Set<() => void>();
 
 export function setSession(session: Session | undefined): void {
+  // A new session, or none, cannot keep the old session's player: it is
+  // scheduled against an AudioContext that is no longer the room's.
+  if (session?.audioContext !== current?.audioContext || session?.ended) closePlayer();
   current = session;
   for (const listener of listeners) listener();
 }
 
 export function getSession(): Session | undefined {
   return current;
+}
+
+/**
+ * The player for the current session's buffer, built once and kept here.
+ *
+ * Here rather than in the component for the same reason the AudioContext is:
+ * it owns a scheduled audio source, and a React remount must not silence it.
+ * It was a `useMemo` closed by an effect cleanup, which meant every recompute
+ * closed the instance the creator's `cue` callback had captured — cues then
+ * landed on a closed player and were dropped in silence.
+ *
+ * Lazy because a joiner has no buffer until the transfer lands.
+ */
+export function sessionPlayer(): Player | undefined {
+  if (!current || current.ended || !current.buffer) return undefined;
+  if (player?.buffer !== current.buffer) {
+    player?.instance.close();
+    player = {
+      buffer: current.buffer,
+      instance: new Player({ sink: current.audioContext, buffer: current.buffer }),
+    };
+  }
+  return player.instance;
+}
+
+let player: { buffer: AudioBuffer; instance: Player } | undefined;
+
+/** Ends the current player, if any. Called when the session itself ends. */
+function closePlayer(): void {
+  player?.instance.close();
+  player = undefined;
 }
 
 export function patchSession(patch: Partial<Session>): void {

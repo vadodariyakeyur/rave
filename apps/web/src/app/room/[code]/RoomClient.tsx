@@ -1,9 +1,15 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
-import { getSession, patchSession, subscribeSession, type Session } from '@/lib/session';
+import {
+  getSession,
+  patchSession,
+  sessionPlayer,
+  subscribeSession,
+  type Session,
+} from '@/lib/session';
 import { Roster } from '@/components/Roster';
 import { Mesh, type PeerConnectionState } from '@/lib/mesh';
 import { Distributor, Receiver } from '@/lib/distribute';
@@ -259,27 +265,24 @@ export function RoomClient() {
   // zero. Two paths here would be two chances to schedule differently.
   const audioContext = session?.audioContext;
   const buffer = session?.buffer;
-  // Derived, not held in a ref: the auto-start effect below has to fire when
-  // the player appears, and a ref cannot be a dependency.
-  //
-  // Gone when the room ends, not just when the audio does: once the creator
-  // is gone there is no shared clock, so a track still running is a track
-  // drifting alone behind a banner saying the room is over.
-  const player = useMemo(
-    () => (audioContext && buffer && !ended ? new Player({ sink: audioContext, buffer }) : undefined),
-    [audioContext, buffer, ended],
-  );
+  // Owned by the session, not by this component: it holds a scheduled audio
+  // source, and a remount must not silence it. Re-read on every render so a
+  // joiner picks it up when their buffer lands, and the creator keeps the
+  // same instance its `cue` callback captured.
+  const player = sessionPlayer();
   const [playback, setPlayback] = useState<PlayerState>({
     playing: false,
     positionSeconds: 0,
   });
   useEffect(() => {
     if (!player) return;
-    const unsubscribe = player.subscribe(() => setPlayback(player.state()));
-    return () => {
-      unsubscribe();
-      player.close();
-    };
+    // The subscribe itself delivers the current state, so there is no
+    // separate seeding read: a cue applied between render and this effect
+    // still reaches us.
+    const push = () => setPlayback(player.state());
+    const unsubscribe = player.subscribe(push);
+    queueMicrotask(push);
+    return unsubscribe;
   }, [player]);
 
   // Position is derived from the audio clock rather than pushed, so nothing
@@ -401,12 +404,10 @@ export function RoomClient() {
   // an excluded peer leaving is a roster change — and recueing then would
   // restart the track from the top for everyone still listening.
   //
-  // Keyed on the player rather than a boolean because the effect below owns
-  // `player.close()`: anything that unmounts this component after the cue
-  // (Strict Mode's remount in dev, most visibly) stops the creator's source
-  // and builds a fresh player, and a boolean would latch that first cue and
-  // leave the creator silent while every peer — who re-applies the cue it
-  // received — plays on. The joiner's equivalent repair is `pendingCue`.
+  // Keyed on the player rather than a boolean: a replacement player has no
+  // source and has heard no cue, so it needs this one, while a boolean would
+  // latch the first cue and leave the creator silent. The joiner's equivalent
+  // repair is `pendingCue`.
   const locked = session?.state.locked ?? false;
   const cuedPlayer = useRef<Player | undefined>(undefined);
   useEffect(() => {
