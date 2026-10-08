@@ -270,9 +270,25 @@ describe('the room list', () => {
         description: 'Friday',
         memberCount: 2,
         hasPasscode: false,
+        mode: 'music',
         nowPlaying: 'track.mp3',
       },
     ]);
+  });
+
+  it('starts in music, and switches to talk only on the creator\'s word', () => {
+    const registry = new RoomRegistry();
+    const room = registry.create({ roomName: 'Kitchen', displayName: 'Keyur' });
+    const sam = registry.join(room.code, 'Sam');
+    assert.ok(sam.ok);
+    assert.equal(room.mode, 'music');
+
+    assert.equal(registry.setMode(sam.peerId, 'talk'), undefined);
+    assert.equal(room.mode, 'music');
+
+    assert.equal(registry.setMode(room.peers[0]!.peerId, 'talk'), room);
+    assert.equal(registry.toState(room).mode, 'talk');
+    assert.equal(registry.list()[0]?.mode, 'talk');
   });
 
   it('takes what is playing only from the creator', () => {

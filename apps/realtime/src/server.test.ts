@@ -83,6 +83,49 @@ function pair(extra: { passcode?: string } = {}) {
   return { host, guest, hostId: created.peerId, guestId: joined.peerId, code: created.code };
 }
 
+describe('reactions', () => {
+  it('reach everyone else in the room, stamped with who sent them, and not the sender', () => {
+    const { host, guest, hostId } = pair();
+    const other = connect();
+    other.receive({ type: 'join-room', code: guest.last('room-joined').code, displayName: 'Ada' });
+
+    host.receive({ type: 'react', reaction: 'fire' });
+
+    for (const socket of [guest, other]) {
+      const heard = socket.last('reaction');
+      assert.equal(heard.from, hostId);
+      assert.equal(heard.reaction, 'fire');
+    }
+    assert.equal(host.sent.filter((m) => m.type === 'reaction').length, 0);
+  });
+
+  it('stay inside their room', () => {
+    const a = pair();
+    const b = pair();
+    a.host.receive({ type: 'react', reaction: 'heart' });
+    assert.equal(b.host.sent.filter((m) => m.type === 'reaction').length, 0);
+    assert.equal(b.guest.sent.filter((m) => m.type === 'reaction').length, 0);
+  });
+
+  it('are dropped, silently, past five a second', () => {
+    const { host, guest } = pair();
+    for (let i = 0; i < 12; i++) host.receive({ type: 'react', reaction: 'party' });
+    assert.equal(guest.sent.filter((m) => m.type === 'reaction').length, 5);
+    assert.equal(host.sent.filter((m) => m.type === 'error').length, 0, 'no error for a held-down button');
+  });
+
+  it('are ignored from a socket that is in no room, and refused when they are not one of the fixed few', () => {
+    const stranger = connect();
+    stranger.receive({ type: 'react', reaction: 'heart' });
+    assert.equal(stranger.sent.filter((m) => m.type === 'reaction' || m.type === 'error').length, 0);
+
+    const { host, guest } = pair();
+    host.receive({ type: 'react', reaction: '<script>' });
+    assert.equal(host.last('error').code, 'invalid-request');
+    assert.equal(guest.sent.filter((m) => m.type === 'reaction').length, 0);
+  });
+});
+
 describe('signal relay', () => {
   it('forwards a payload to the addressed peer, stamped with the sender', () => {
     const { host, guest, hostId } = pair();

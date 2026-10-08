@@ -63,6 +63,7 @@ const roster = {
   code: 'ABC234',
   roomName: 'Kitchen',
   description: '',
+  mode: 'music',
   peers: [{ peerId: ME, displayName: 'Sam', isCreator: false }],
 };
 
@@ -182,6 +183,7 @@ describe('watching the room list', () => {
     description: '',
     memberCount: 1,
     hasPasscode: false,
+    mode: 'music',
     nowPlaying: null,
   };
 

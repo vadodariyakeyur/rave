@@ -146,6 +146,7 @@ describe('server room messages', () => {
         code: 'ABC234',
         roomName: 'Kitchen',
         description: '',
+        mode: 'music',
         peers: [
           {
             peerId: '6f1b3c7e-4f3a-4b2e-8f1a-2c3d4e5f6a7b',
@@ -298,12 +299,41 @@ describe('the room list', () => {
             description: '',
             memberCount: 3,
             hasPasscode: true,
+            mode: 'talk',
             nowPlaying: null,
           },
         ],
       }),
     );
     assert.equal(msg?.type === 'room-list' && msg.rooms[0]?.hasPasscode, true);
+  });
+
+  it('parses set-mode and refuses a mode that does not exist', () => {
+    assert.equal(parseClientMessage(JSON.stringify({ type: 'set-mode', mode: 'talk' }))?.type, 'set-mode');
+    assert.equal(parseClientMessage(JSON.stringify({ type: 'set-mode', mode: 'karaoke' })), null);
+  });
+
+  it('parses react and reaction, and only for the fixed set', () => {
+    for (const reaction of ['heart', 'fire', 'thumbs-up', 'party', 'laugh']) {
+      assert.equal(parseClientMessage(JSON.stringify({ type: 'react', reaction }))?.type, 'react');
+    }
+    assert.equal(parseClientMessage(JSON.stringify({ type: 'react', reaction: 'poop' })), null);
+    assert.equal(parseClientMessage(JSON.stringify({ type: 'react' })), null);
+    const heard = parseServerMessage(
+      JSON.stringify({ type: 'reaction', from: '6f1b3c7e-4f3a-4b2e-8f1a-2c3d4e5f6a7b', reaction: 'laugh' }),
+    );
+    assert.equal(heard?.type, 'reaction');
+    assert.equal(
+      parseServerMessage(JSON.stringify({ type: 'reaction', from: 'not-a-uuid', reaction: 'laugh' })),
+      null,
+    );
+  });
+
+  it('refuses a room-state that does not say its mode', () => {
+    const msg = parseServerMessage(
+      JSON.stringify({ type: 'room-state', code: 'ABC234', roomName: 'K', description: '', peers: [] }),
+    );
+    assert.equal(msg, null);
   });
 
   it('parses the messages that ask for it and feed it', () => {

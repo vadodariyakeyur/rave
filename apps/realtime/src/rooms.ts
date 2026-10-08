@@ -3,6 +3,7 @@ import {
   ROOM_CODE_ALPHABET,
   ROOM_CODE_LENGTH,
   type ErrorMessage,
+  type Mode,
   type Peer,
   type RoomClosed,
   type RoomState,
@@ -25,6 +26,8 @@ export interface Room {
   description: string;
   /** Held here and nowhere else: it is checked on join and never sent out. */
   passcode?: string;
+  /** Music until the creator switches it. */
+  mode: Mode;
   /** What the creator says is playing. Display only, for the room list. */
   nowPlaying: string | null;
   peers: Peer[];
@@ -100,6 +103,7 @@ export class RoomRegistry {
       createdAt: new Date().toISOString(),
       description: input.description ?? '',
       passcode: input.passcode,
+      mode: 'music',
       nowPlaying: null,
       peers: [creator],
     };
@@ -165,6 +169,14 @@ export class RoomRegistry {
     return room;
   }
 
+  /** The creator switches the room's mode. Undefined if they are not a creator. */
+  setMode(creatorId: string, mode: Mode): Room | undefined {
+    const room = this.roomForPeer(creatorId);
+    if (!room?.peers.some((p) => p.peerId === creatorId && p.isCreator)) return undefined;
+    room.mode = mode;
+    return room;
+  }
+
   /** Every live room, as the homepage lists it. */
   list(): RoomSummary[] {
     return [...this.#byCode.values()].map((room) => ({
@@ -173,6 +185,7 @@ export class RoomRegistry {
       description: room.description,
       memberCount: room.peers.length,
       hasPasscode: room.passcode !== undefined,
+      mode: room.mode,
       nowPlaying: room.nowPlaying,
     }));
   }
@@ -208,6 +221,7 @@ export class RoomRegistry {
       code: room.code,
       roomName: room.roomName,
       description: room.description,
+      mode: room.mode,
       peers: room.peers,
     };
   }

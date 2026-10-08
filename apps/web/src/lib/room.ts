@@ -1,11 +1,14 @@
 'use client';
 
-import type { Peer, RoomClosed, RoomState } from '@rave/protocol';
+import type { Mode, Peer, Reaction, RoomClosed, RoomState } from '@rave/protocol';
 import { decodeBytes } from './audio';
+import { makeArt, type TrackArt } from './artimage';
+import { artOf } from './artwork';
 import { ClockProbe, serveClock, type Clock, type Estimate } from './clock';
 import { Distributor, Receiver, type Download } from './distribute';
 import { Mesh, type PeerConnectionState } from './mesh';
 import { Player, START_LEAD_MS, type AudioSink, type Every } from './player';
+import { Voice, type VoiceState } from './voice';
 import type { Entered, Signaling } from './signaling';
 import type { Outgoing, Transfer } from './transfer';
 import type { Cue, PeerMessage, PlayCue, Track } from './wire';
@@ -18,13 +21,24 @@ import type { Cue, PeerMessage, PlayCue, Track } from './wire';
 export type Ended = RoomClosed['reason'] | 'lost-connection';
 
 /** A playlist entry, with where it stands on this device. */
-export interface PlaylistItem extends Track, Download {}
+export interface PlaylistItem extends Track, Download {
+  /** The picture inside the file, once this device has read it. Absent means the generated cover. */
+  art?: TrackArt;
+}
+
+/** Someone in the room reacted. `from` is their peer id, ours included. */
+export interface ReactionEvent {
+  from: string;
+  reaction: Reaction;
+}
 
 /** Everything the screen shows, as of one moment. Replaced, never mutated. */
 export interface RoomSnapshot {
   code: string;
   roomName: string;
   description: string;
+  /** What the room is doing: playing tracks in sync, or everyone talking. */
+  mode: Mode;
   /** The server's own truth about who is in the room. */
   peers: Peer[];
   selfPeerId: string;
@@ -45,13 +59,19 @@ export interface RoomSnapshot {
   /** Seconds, once the current track has been decoded here. */
   currentDuration?: number;
   playing: boolean;
+  /** The microphone and everyone's voices. Only in use while the mode is talk. */
+  voice: VoiceState;
   /** Undefined on the creator: it is the clock, so it has no offset to itself. */
   estimate?: Estimate;
 }
 
 type RoomSignaling = Pick<Signaling, 'send' | 'onMessage' | 'onClose' | 'close'>;
-type RoomAudio = AudioSink & Pick<AudioContext, 'decodeAudioData' | 'close'>;
-type RoomMesh = Pick<Mesh, 'states' | 'link' | 'subscribe' | 'sync' | 'close'>;
+type RoomAudio = AudioSink &
+  Pick<AudioContext, 'decodeAudioData' | 'close' | 'createMediaStreamSource' | 'createAnalyser'>;
+type RoomMesh = Pick<
+  Mesh,
+  'states' | 'link' | 'subscribe' | 'sync' | 'close' | 'setLocalAudio' | 'onRemoteAudio'
+>;
 
 /** What a test swaps out. The browser's own, by default. */
 export interface RoomDeps {
@@ -60,6 +80,8 @@ export interface RoomDeps {
   every?: Every;
   /** Mints a track id. */
   id: () => string;
+  /** The picture inside a file's bytes, shrunk for the screen. Undefined when there is none. */
+  readArt: (bytes: ArrayBuffer) => Promise<TrackArt | undefined>;
 }
 
 const realDeps: RoomDeps = {
@@ -72,6 +94,10 @@ const realDeps: RoomDeps = {
     },
   },
   id: () => crypto.randomUUID(),
+  readArt: async (bytes) => {
+    const art = artOf(bytes);
+    return art ? makeArt(art) : undefined;
+  },
 };
 
 /**
@@ -96,14 +122,20 @@ export class LiveRoom {
   readonly #audio: RoomAudio;
   readonly #clock: Clock;
   readonly #id: () => string;
+  readonly #readArt: RoomDeps['readArt'];
   readonly #mesh: RoomMesh;
   readonly #player: Player;
+  readonly #voice: Voice;
   readonly #selfPeerId: string;
   readonly #isCreator: boolean;
   readonly #passcode: string | undefined;
   readonly #listeners = new Set<() => void>();
   /** Everything to undo when the room ends, whichever way it ends. */
   readonly #teardown: (() => void)[] = [];
+  /** Each track's picture, and which have been looked at so a file is read once. */
+  readonly #art = new Map<string, TrackArt>();
+  readonly #artLooked = new Set<string>();
+  readonly #reactionListeners = new Set<(event: ReactionEvent) => void>();
   /** Creator only: the members being answered, and how to stop. */
   readonly #served = new Map<string, () => void>();
   /** Creator only: every track's encoded bytes, which is what gets sent. */
@@ -135,12 +167,13 @@ export class LiveRoom {
     },
     deps: Partial<RoomDeps> = {},
   ) {
-    const { createMesh, clock, every, id } = { ...realDeps, ...deps };
+    const { createMesh, clock, every, id, readArt } = { ...realDeps, ...deps };
     const { signaling, entered } = input;
     this.#signaling = signaling;
     this.#audio = input.audioContext;
     this.#clock = clock;
     this.#id = id;
+    this.#readArt = readArt;
     this.#passcode = input.passcode;
     this.#state = entered.state;
     this.#selfPeerId = entered.peerId;
@@ -160,6 +193,14 @@ export class LiveRoom {
     });
     this.#teardown.push(this.#mesh.subscribe(() => this.#emit()));
 
+    this.#voice = new Voice({
+      mesh: this.#mesh,
+      context: input.audioContext,
+      selfPeerId: entered.peerId,
+      every,
+    });
+    this.#teardown.push(this.#voice.subscribe(() => this.#emit()), () => this.#voice.close());
+
     if (this.#isCreator) {
       // The creator is the reference: the instant it cues is already in the
       // clock every member measured itself against.
@@ -175,6 +216,7 @@ export class LiveRoom {
       signaling.onMessage((msg) => {
         if (msg.type === 'room-state') this.#roster(msg);
         if (msg.type === 'room-closed') this.#end(msg.reason);
+        if (msg.type === 'reaction') this.#reacted({ from: msg.from, reaction: msg.reaction });
       }),
       // A dropped socket leaves the roster frozen and looking live — but it
       // is our socket, not the room.
@@ -212,6 +254,7 @@ export class LiveRoom {
         if (this.#ended || this.#closed) return;
         const trackId = this.#id();
         this.#files.set(trackId, { trackId, bytes, fileName: file.name });
+        this.#loadArt(trackId, bytes);
         this.#setPlaylist([
           ...this.#playlist,
           { id: trackId, title: file.name, byteLength: bytes.byteLength },
@@ -284,6 +327,42 @@ export class LiveRoom {
     this.#cue(() => ({ type: 'stop' }));
   }
 
+  /**
+   * Creator only: switch the room between playing tracks and talking.
+   *
+   * Going to talk stops the music first, for everyone; the playlist and the
+   * files already sent stay, so switching back is instant. The server then
+   * tells the whole room, which is how every device learns the mode.
+   */
+  setMode(mode: Mode): void {
+    if (!this.#isCreator || this.#ended || mode === this.#state.mode) return;
+    if (mode === 'talk') this.stop();
+    this.#signaling.send({ type: 'set-mode', mode });
+  }
+
+  /** Ask for the microphone and go live. Talk mode only: it needs a tap. */
+  enableMic(): Promise<void> {
+    return this.#state.mode === 'talk' ? this.#voice.enable() : Promise.resolve();
+  }
+
+  /** Mute or unmute this device. A muted microphone is still on, and sends silence. */
+  setMuted(muted: boolean): void {
+    this.#voice.setMuted(muted);
+  }
+
+  /** Show everyone else this reaction. Ours is drawn straight away, not after the round trip. */
+  react(reaction: Reaction): void {
+    if (this.#ended || this.#closed) return;
+    this.#signaling.send({ type: 'react', reaction });
+    this.#reacted({ from: this.#selfPeerId, reaction });
+  }
+
+  /** Told of every reaction in the room, ours included. Returns an unsubscribe. */
+  onReaction(listener: (event: ReactionEvent) => void): () => void {
+    this.#reactionListeners.add(listener);
+    return () => this.#reactionListeners.delete(listener);
+  }
+
   /** Creator only: remove a member. They may join again. */
   kick(peerId: string): void {
     if (!this.#isCreator || this.#ended) return;
@@ -301,6 +380,14 @@ export class LiveRoom {
    */
   position(): number {
     return this.#player.position();
+  }
+
+  /**
+   * The spectrum of what is playing, into the caller's array. False when
+   * nothing is. Read on a tick, like position().
+   */
+  levels(out: Uint8Array): boolean {
+    return this.#player.levels(out);
   }
 
   /** How far this device has slipped from the shared clock, in ms. */
@@ -331,6 +418,10 @@ export class LiveRoom {
       receiver.subscribe(() => {
         // A track removed while it was on its way here is not kept.
         receiver.keep(this.#playlist.map((t) => t.id));
+        for (const track of this.#playlist) {
+          const bytes = receiver.bytes(track.id);
+          if (bytes) this.#loadArt(track.id, bytes);
+        }
         // The track the room is on may be the one that just landed.
         if (this.#currentTrackId) void this.#prepare(this.#currentTrackId);
         this.#emit();
@@ -385,12 +476,16 @@ export class LiveRoom {
    */
   #roster(state: RoomState): void {
     if (this.#ended) return;
+    // Leaving talk puts the microphone down: it is only ever on while the
+    // room is for talking.
+    if (state.mode !== 'talk') this.#voice.release();
     this.#state = state;
-    // A member connects to the creator and nobody else: everything it needs
-    // comes from there, and a link per pair of members would grow with the
-    // square of the room for nothing.
+    // In music a member connects to the creator and nobody else: everything
+    // it needs comes from there, and a link per pair of members would grow
+    // with the square of the room for nothing. In talk everyone has to hear
+    // everyone, so every device connects to every other.
     this.#mesh.sync(
-      this.#isCreator
+      this.#isCreator || state.mode === 'talk'
         ? state.peers
         : state.peers.filter((p) => p.isCreator || p.peerId === this.#selfPeerId),
     );
@@ -420,6 +515,40 @@ export class LiveRoom {
     this.#emit();
   }
 
+  #reacted(event: ReactionEvent): void {
+    if (this.#ended || this.#closed) return;
+    for (const listener of [...this.#reactionListeners]) listener(event);
+  }
+
+  /** Read a track's embedded picture, once. A file with none costs nothing but this look. */
+  #loadArt(trackId: string, bytes: ArrayBuffer): void {
+    if (this.#artLooked.has(trackId)) return;
+    this.#artLooked.add(trackId);
+    void this.#readArt(bytes).then(
+      (art) => {
+        if (!art) return;
+        // Gone while it was being shrunk: the room ended, or the track was removed.
+        if (this.#closed || this.#ended || !this.#playlist.some((t) => t.id === trackId)) {
+          URL.revokeObjectURL(art.url);
+          return;
+        }
+        this.#art.set(trackId, art);
+        this.#emit();
+      },
+      () => {},
+    );
+  }
+
+  /** Let go of the pictures of every track not in `keep`. */
+  #forgetArt(keep: ReadonlySet<string>): void {
+    for (const [trackId, art] of this.#art) {
+      if (keep.has(trackId)) continue;
+      URL.revokeObjectURL(art.url);
+      this.#art.delete(trackId);
+    }
+    for (const trackId of this.#artLooked) if (!keep.has(trackId)) this.#artLooked.delete(trackId);
+  }
+
   /** Tell one new arrival where the room is. */
   #greet(peerId: string): void {
     if (this.#ended || !this.#served.has(peerId)) return;
@@ -434,6 +563,7 @@ export class LiveRoom {
   /** Creator only: the playlist changed. Everyone hears the whole of it. */
   #setPlaylist(playlist: Track[]): void {
     this.#playlist = playlist;
+    this.#forgetArt(new Set(playlist.map((t) => t.id)));
     this.#distributor?.setTracks(playlist.map((t) => this.#files.get(t.id)!));
     this.#broadcast({ type: 'playlist', tracks: playlist });
     this.#emit();
@@ -542,6 +672,7 @@ export class LiveRoom {
     for (const stop of this.#served.values()) stop();
     this.#served.clear();
     this.#files.clear();
+    this.#forgetArt(new Set());
     this.#mesh.close();
     this.#player.close();
   }
@@ -557,6 +688,7 @@ export class LiveRoom {
       code: this.#state.code,
       roomName: this.#state.roomName,
       description: this.#state.description,
+      mode: this.#state.mode,
       peers: this.#state.peers,
       selfPeerId: this.#selfPeerId,
       isCreator: this.#isCreator,
@@ -570,11 +702,13 @@ export class LiveRoom {
         ...track,
         // The creator holds every track from the moment it is added.
         ...(this.#receiver?.download(track.id) ?? { progress: 1, state: 'ready' as const }),
+        art: this.#art.get(track.id),
       })),
       currentTrackId: this.#currentTrackId,
       currentDuration:
         this.#decoded?.trackId === this.#currentTrackId ? this.#decoded?.duration : undefined,
       playing: this.#player.state().playing,
+      voice: this.#voice.state(),
       estimate: this.#estimate,
     };
   }

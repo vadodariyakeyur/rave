@@ -12,13 +12,24 @@ export interface DecodedTrack {
   durationSeconds: number;
 }
 
+/**
+ * Which kind of audio this page is, to iOS.
+ *
+ * "playback" is what a music app is: it survives the lock screen and the
+ * ringer switch. A microphone needs "play-and-record" instead, so that is
+ * only set while one is on. Safari 16.4+; nothing to do elsewhere.
+ */
+export function setAudioSession(type: 'playback' | 'play-and-record'): void {
+  if (typeof navigator === 'undefined') return;
+  const session = (navigator as { audioSession?: { type: string } }).audioSession;
+  if (session) session.type = type;
+}
+
 /** Must be called synchronously from a user gesture handler. */
 export async function armAudio(ctx: AudioContext): Promise<void> {
   // iOS files a page that only uses Web Audio under "ambient" sound, which
-  // the lock screen and the ringer switch both silence. "playback" is the
-  // category a music app has. Safari 16.4+; nothing to do elsewhere.
-  const session = (navigator as { audioSession?: { type: string } }).audioSession;
-  if (session) session.type = 'playback';
+  // the lock screen and the ringer switch both silence.
+  setAudioSession('playback');
   if (ctx.state !== 'running') await ctx.resume();
   // Resuming is not enough on iOS: a source has to actually have played.
   const silence = ctx.createBufferSource();

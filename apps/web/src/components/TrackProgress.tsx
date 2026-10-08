@@ -34,20 +34,19 @@ export function TrackProgress({
         aria-valuemax={Math.round(durationSeconds)}
         aria-valuenow={Math.round(positionSeconds)}
         aria-valuetext={`${formatDuration(positionSeconds)} of ${formatDuration(durationSeconds)}`}
-        // currentColor, so the bar reads on whatever card it is put on.
-        className="h-2.5 w-full overflow-hidden rounded-full bg-current/20"
+        className="h-1 w-full overflow-hidden rounded-full bg-white/20"
       >
         <div
           // Linear and about as long as the tick that re-reads it, so the
           // bar glides between readings instead of stepping.
-          className="h-full rounded-full bg-current transition-[width] duration-200 ease-linear"
+          className="h-full rounded-full bg-white transition-[width] duration-200 ease-linear"
           style={{ width: `${percent}%` }}
         />
       </div>
-      <div className="flex justify-between text-xs font-medium tabular-nums opacity-80">
+      <div className="flex justify-between text-xs font-medium tabular-nums text-muted-foreground">
         {/* Tabular figures so the digits do not shuffle sideways each tick. */}
         <span>{formatDuration(positionSeconds)}</span>
-        <span>{playing ? formatDuration(durationSeconds) : 'Paused'}</span>
+        <span>{playing ? `-${formatDuration(Math.max(0, durationSeconds - positionSeconds))}` : 'Paused'}</span>
       </div>
     </div>
   );

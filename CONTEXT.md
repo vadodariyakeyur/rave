@@ -2,7 +2,8 @@
 
 Synchronized peer-to-peer audio rooms: one person opens a room and adds tracks to its
 playlist, others join from the room list or with a room code, and every device plays the
-same track at the same instant.
+same track at the same instant. A room can also be switched to talk mode, where everyone in
+it can speak to everyone else.
 
 This file says what the system is and how it fits together. The words it uses are defined in
 [GLOSSARY.md](GLOSSARY.md). The decisions behind the shape are in [docs/adr/](docs/adr/).
@@ -51,7 +52,8 @@ readings.
   and exposes a snapshot to the screen. The screen decides none of the ordering.
 - [mesh.ts](apps/web/src/lib/mesh.ts) opens one WebRTC data channel per connected peer, with
   signaling relayed by the server. The creator connects to every member; a member connects
-  only to the creator ([ADR 0002](docs/adr/0002-members-connect-only-to-the-creator.md)).
+  only to the creator in music mode ([ADR 0002](docs/adr/0002-members-connect-only-to-the-creator.md))
+  and to everyone in talk mode.
 - Over those channels go: the playlist and cues ([wire.ts](apps/web/src/lib/wire.ts)), clock
   probes ([clock.ts](apps/web/src/lib/clock.ts)) and the files
   ([transfer.ts](apps/web/src/lib/transfer.ts), [distribute.ts](apps/web/src/lib/distribute.ts)).
@@ -62,10 +64,49 @@ Pages (`apps/web/src/app`): `/` the room list, `/create`, and `/room/[code]`, wh
 [PreJoin](apps/web/src/app/room/[code]/PreJoin.tsx) until this tab has entered the room. A
 refresh loses the room on purpose and lands on pre-join again. `?debug=1` on a room shows the
 debug overlay; `?locked=1` on a room link, which the room list adds for a room with a passcode,
-makes pre-join ask for the passcode up front.
+makes pre-join ask for the passcode up front. Pre-join also finds the room in the room list by
+its code and shows it, so a person sees what they are about to join.
 
 ## How it behaves
 
+- **Modes.** A room is in music mode (the default) or talk mode. Only the creator switches it,
+  by telling the server, which stores it and resends the roster; every device, and anyone
+  joining later, learns the mode from the roster. The room list shows it. Switching to talk
+  stops the music for everyone and keeps the playlist.
+- **Talk mode.** Every device connects to every other, one audio line each way, direct and
+  off the server ([ADR 0004](docs/adr/0004-talk-mode-connects-everyone-to-everyone.md)). A
+  microphone is asked for with a tap, goes live, and can be muted; it is let go of on leaving
+  talk mode. Anyone can listen without a microphone. Echo cancellation is on, but feedback
+  between devices in the same room needs headphones. There is no cap on talk rooms, only a
+  warning past 8 people.
+- **Looks.** The frame is Apple Music's, in Liquid Glass: panels of glass float on one window-wide
+  backdrop, inset from the edges by the same gap. On the left a sidebar (the app's mark, Rooms and
+  Create a room, then in a room its name, the Music and Talk rows, the playlist with a cover per
+  track, and the person's own name with the audio-delay setting); in the middle the main area
+  scrolling under a floating bar; on the right a people panel grouped under Host and Members.
+  Music mode's main area is a stage (cover, ring of bars, title, progress with time left,
+  transport); talk mode's is a tile per person with a ring around whoever is speaking and a
+  control bar. Under 1200px the people panel sits behind a button; on a phone there is one panel
+  at a time (Room, Playlist, People) with a floating tab bar, and a player capsule above it once
+  the stage is out of view. Glass is for navigation and controls only (sidebar, bars, player,
+  dialogs, buttons); content (the stage, room cards, talk tiles) is a plain tinted surface. Glass
+  is approximated with blur, a lit edge and a specular rim (`globals.css`), plus an SVG
+  displacement filter on the player in Chromium only; with reduced transparency or more contrast
+  it becomes solid. Controls are capsules; panels 28px, tiles 20px, each inner radius its outer
+  minus the gap. The colour comes from the cover: behind the window sits a backdrop
+  (`Backdrop.tsx`) of four blurred copies of the current cover, turning slowly, which crossfades
+  when the track changes and holds still when nothing plays. Covers come from the picture inside
+  the file when it has one (`artwork.ts`, read from bytes a device already holds, so nothing
+  extra is sent) and are generated from the title otherwise (`cover.ts`); avatars are generated
+  from the name. The ring (`visualizer.ts`) is drawn from an analyser on the player's own output,
+  limited in how fast it can rise so it cannot flash, and stops when nothing plays, the tab is
+  hidden, or it is switched off. The theme is `theme.css`: Apple's dark greys, Apple Music's
+  pink-red for the main action (the accent), green for anything live, the system font first
+  (SF on Apple devices) with Geist elsewhere; covers and avatars are content and do not change
+  with the theme. A faint grain lies over the page.
+- **Reactions.** A tap sends one of a fixed set to the server, which relays it to everyone else
+  in the room, stamped with who sent it, and drops anything past five a second from one
+  connection. The sender draws their own at once.
 - **Opening a room.** The creator enters a room name (up to 64 characters), an optional
   description (up to 200), a display name (up to 32) and an optional passcode. The room starts
   with no tracks.
@@ -114,6 +155,7 @@ makes pre-join ask for the passcode up front.
   one device (ADR 0002).
 - A start is not simultaneous by construction: a device that does not yet hold or has not yet
   decoded the track comes in late, in sync (ADR 0001, ADR 0003).
+- Voice is a connection per pair of people, so large talk rooms strain phones (ADR 0004).
 - Only a STUN server is configured; there is no TURN, so peers that cannot reach each other
   directly cannot join the mesh. `ICE_SERVERS` takes URLs only, which cannot carry TURN
   credentials ([ice.ts](apps/realtime/src/ice.ts)).

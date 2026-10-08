@@ -100,6 +100,28 @@ describe('joining with a passcode', () => {
   });
 });
 
+describe('switching the mode', () => {
+  it('tells the whole room and the room list, and only for the creator', () => {
+    const h = hub();
+    const { hostId, guestId } = pair(h);
+
+    const refused = h.handle(guestId, { type: 'set-mode', mode: 'talk' });
+    assert.equal((refused.reply[0] as Extract<ServerMessage, { type: 'error' }>).code, 'not-creator');
+    assert.equal(refused.listChanged, undefined);
+
+    const done = h.handle(hostId, { type: 'set-mode', mode: 'talk' });
+    assert.deepEqual(heard(done, 'room-state').sort(), [hostId, guestId].sort());
+    assert.equal(done.listChanged, true);
+    const state = done.deliveries[0]!.msg as Extract<ServerMessage, { type: 'room-state' }>;
+    assert.equal(state.mode, 'talk');
+  });
+
+  it('is refused for a connection that is in no room', () => {
+    const outcome = hub().handle(undefined, { type: 'set-mode', mode: 'talk' });
+    assert.equal((outcome.reply[0] as Extract<ServerMessage, { type: 'error' }>).code, 'not-creator');
+  });
+});
+
 describe('kick', () => {
   it('tells the kicked why, drops them, and gives the rest a roster without them', () => {
     const h = hub();

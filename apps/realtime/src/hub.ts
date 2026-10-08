@@ -45,6 +45,8 @@ const JOIN_REFUSAL = {
   'passcode-wrong': 'That passcode is not right.',
 } as const;
 
+const MODE_REFUSAL = 'Only the creator can change what the room is doing.';
+
 const KICK_REFUSAL = {
   'not-creator': 'Only the creator can remove someone.',
   'peer-not-found': 'That peer is not in this room.',
@@ -137,6 +139,29 @@ export class RoomHub {
         // Not from a creator: nothing to show, and nobody to tell.
         const room = peerId === undefined ? undefined : this.#rooms.setNowPlaying(peerId, msg.title);
         return room ? { ...NOTHING, listChanged: true } : NOTHING;
+      }
+
+      case 'set-mode': {
+        const room = peerId === undefined ? undefined : this.#rooms.setMode(peerId, msg.mode);
+        if (!room) return refuse('not-creator', MODE_REFUSAL);
+        this.#log('mode set', { code: room.code, mode: room.mode });
+        // The roster carries the mode, so this is how everyone, and anyone
+        // arriving later, learns it.
+        return this.#announce(room);
+      }
+
+      case 'react': {
+        const room = peerId === undefined ? undefined : this.#rooms.roomForPeer(peerId);
+        if (peerId === undefined || !room) return NOTHING;
+        // Everyone but the sender, who draws their own at once rather than
+        // waiting for a round trip, and `from` stamped here, never taken.
+        return {
+          reply: [],
+          deliveries: room.peers
+            .filter((p) => p.peerId !== peerId)
+            .map((p) => ({ to: p.peerId, msg: { type: 'reaction', from: peerId, reaction: msg.reaction } as const })),
+          dropped: [],
+        };
       }
 
       case 'signal': {

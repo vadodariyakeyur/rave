@@ -4,37 +4,31 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import Link from 'next/link';
 import { useParams, useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
-import {
-  ArrowLeft,
-  Check,
-  ChevronDown,
-  ChevronUp,
-  Disc3,
-  DoorOpen,
-  LoaderCircle,
-  Music,
-  Pause,
-  Play,
-  RotateCcw,
-  Square,
-  Upload,
-  Users,
-  X,
-} from 'lucide-react';
+import { ArrowLeft, DoorOpen, Headphones, ListMusic, Mic, MicOff, Music, Settings, Users } from 'lucide-react';
+import type { Mode } from '@rave/protocol';
 import { getRoom, subscribeRoom } from '@/lib/session';
-import type { Ended, PlaylistItem } from '@/lib/room';
+import type { Ended } from '@/lib/room';
+import type { VoiceState } from '@/lib/voice';
 import { POSITION_TICK_MS } from '@/lib/player';
-import { encodePasscode } from '@/lib/passcode';
 import { loadUserOffset, saveUserOffset } from '@/lib/offset';
+import { encodePasscode } from '@/lib/passcode';
+import { loadVisuals, saveVisuals } from '@/lib/visuals';
 import { keepAwake, onHidden } from '@/lib/wake';
+import { Avatar } from '@/components/Avatar';
+import { SpeakerBackdrop } from '@/components/SpeakerBackdrop';
+import { Cover } from '@/components/Cover';
 import { Roster } from '@/components/Roster';
+import { Bar, Shell, TopBar, type Panel } from '@/components/Shell';
 import { DebugOverlay } from '@/components/DebugOverlay';
+import { MiniPlayer } from '@/components/MiniPlayer';
 import { OffsetSlider } from '@/components/OffsetSlider';
-import { TrackProgress } from '@/components/TrackProgress';
-import { Button, buttonVariants } from '@/components/ui/button';
-import { Equalizer } from '@/components/Equalizer';
-import { cn } from '@/lib/utils';
+import { Queue } from '@/components/Queue';
+import { Reactions } from '@/components/Reactions';
 import { ShareDialog } from '@/components/ShareDialog';
+import { Stage } from '@/components/Stage';
+import { TalkGrid } from '@/components/TalkGrid';
+import { Button, buttonVariants } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 import { PreJoin } from './PreJoin';
 
 /**
@@ -192,14 +186,38 @@ export function RoomClient() {
     () => undefined,
   );
 
+  // Whether the ring of bars moves. Lazily, like the offset: no storage on the server.
+  const [visuals, setVisuals] = useState(() => loadVisuals());
+  const changeVisuals = useCallback((on: boolean) => {
+    setVisuals(on);
+    saveVisuals(on);
+  }, []);
+
+  // On a phone the stage scrolls away; the mini player takes over exactly then.
+  const stage = useRef<HTMLElement>(null);
+  const [stageVisible, setStageVisible] = useState(true);
+  const mode = snapshot?.mode;
+  useEffect(() => {
+    const el = stage.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(([entry]) => setStageVisible(entry!.isIntersecting));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [inRoom, mode]);
+
+  // Files dropped anywhere on the music screen, for the creator.
+  const [dragging, setDragging] = useState(false);
+
+  // Which column a phone shows, and whether the audio-delay slider is open.
+  const [panel, setPanel] = useState<Panel>('main');
+  const [delayOpen, setDelayOpen] = useState(false);
+
   // No room means a refresh or a pasted link — the tap that arms audio has
   // not happened, so this is where it happens.
   const code = params?.code?.toUpperCase();
   if (!room || !snapshot) {
     return code ? <PreJoin code={code} locked={search?.get('locked') === '1'} /> : null;
   }
-
-  const current = snapshot.playlist.find((t) => t.id === snapshot.currentTrackId);
 
   async function addTracks(files: FileList | null) {
     if (!room || !files || files.length === 0) return;
@@ -214,8 +232,135 @@ export function RoomClient() {
     }
   }
 
+  const names = new Map(snapshot.peers.map((p) => [p.peerId, p.displayName]));
+  const hasCurrent = snapshot.currentTrackId !== undefined;
+  const current = snapshot.mode === 'music' ? snapshot.playlist.find((t) => t.id === snapshot.currentTrackId) : undefined;
+
+  const self = snapshot.peers.find((p) => p.peerId === snapshot.selfPeerId);
+  const sharing = joinUrl && <ShareDialog url={joinUrl} hasPasscode={passcode !== undefined} />;
+  const togglePeople = () => setPanel((p) => (p === 'aside' ? 'main' : 'aside'));
+
+  const sidebar = (
+    <>
+      <Bar className="gap-2.5">
+        <Cover title={snapshot.roomName} className="size-8 rounded-lg" />
+        <span className="truncate">{snapshot.roomName}</span>
+      </Bar>
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-2 pb-2">
+        {!snapshot.ended && (
+          <ModeSwitch
+            mode={snapshot.mode}
+            onChange={isCreator ? (mode) => room.setMode(mode) : undefined}
+          />
+        )}
+        <Queue
+          room={room}
+          snapshot={snapshot}
+          adding={adding}
+          addError={addError}
+          onFiles={(files) => void addTracks(files)}
+        />
+      </div>
+      {snapshot.mode === 'talk' && !snapshot.ended && (
+        <p className="mx-2 flex shrink-0 items-center gap-2 rounded-full bg-white/8 px-4 py-2 text-sm font-semibold text-chart-1">
+          <span aria-hidden className="size-2 rounded-full bg-chart-1" />
+          Talk connected
+        </p>
+      )}
+      {delayOpen && (
+        <div className="mx-2 mt-2 shrink-0 rounded-[20px] bg-white/8 p-3">
+          <OffsetSlider valueMs={userOffsetMs} onChange={changeUserOffset} />
+        </div>
+      )}
+      <div className="m-2 flex h-14 shrink-0 items-center gap-2.5 rounded-full bg-white/8 pr-2 pl-2">
+        <Avatar name={self?.displayName ?? '?'} size="sm" />
+        <span className="flex min-w-0 flex-1 flex-col leading-tight">
+          <span className="truncate text-sm font-semibold">{self?.displayName}</span>
+          <span className="text-xs text-muted-foreground">{isCreator ? 'host' : 'member'}</span>
+        </span>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          aria-label="My audio delay"
+          aria-expanded={delayOpen}
+          onClick={() => setDelayOpen((open) => !open)}
+        >
+          <Settings />
+        </Button>
+      </div>
+    </>
+  );
+
+  const people = (
+    <>
+      <Bar>
+        <Users className="size-5 text-muted-foreground" />
+        In the room
+      </Bar>
+      <div className="px-2 pb-2">
+        <Roster
+          peers={snapshot.peers}
+          selfPeerId={snapshot.selfPeerId}
+          connections={snapshot.connections}
+          transfers={snapshot.transfers}
+          speaking={snapshot.mode === 'talk' ? snapshot.voice.speaking : undefined}
+          selfMuted={snapshot.mode === 'talk' && snapshot.voice.micOn && snapshot.voice.muted}
+          onKick={isCreator ? (peerId) => room.kick(peerId) : undefined}
+        />
+      </div>
+    </>
+  );
+
+  const tabs = (
+    <nav aria-label="Panels" className="glass mx-2 mb-[max(0.5rem,env(safe-area-inset-bottom))] flex h-14 shrink-0 gap-1 rounded-full p-1 md:hidden">
+      {(
+        [
+          { panel: 'main', label: 'Room', Icon: Music },
+          { panel: 'sidebar', label: 'Playlist', Icon: ListMusic },
+          { panel: 'aside', label: 'People', Icon: Users },
+        ] as const
+      ).map(({ panel: value, label, Icon }) => (
+        <button
+          key={value}
+          type="button"
+          aria-current={panel === value ? 'page' : undefined}
+          onClick={() => setPanel(value)}
+          className={cn(
+            'flex flex-1 flex-col items-center justify-center gap-0.5 rounded-full text-xs font-semibold transition-[background-color,scale] duration-300 ease-soft active:scale-[0.96] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+            panel === value ? 'bg-white/16 text-foreground' : 'text-muted-foreground',
+          )}
+        >
+          <Icon className="size-5" />
+          {label}
+        </button>
+      ))}
+    </nav>
+  );
+
   return (
-    <main className="mx-auto flex min-h-dvh max-w-5xl flex-col gap-8 px-5 py-6 sm:px-8 sm:py-8">
+    <Shell
+      backdrop={
+        <SpeakerBackdrop
+          talk={snapshot.mode === 'talk'}
+          speaker={[...snapshot.voice.speaking].map((id) => names.get(id)).find(Boolean)}
+          fallback={current?.title ?? snapshot.roomName}
+          art={current?.art}
+          idle={!(snapshot.mode === 'music' && snapshot.playing)}
+        />
+      }
+      sidebar={sidebar}
+      aside={people}
+      panel={panel}
+      footer={
+        <>
+          {snapshot.mode === 'music' && !snapshot.ended && hasCurrent && !stageVisible && (
+            <MiniPlayer room={room} snapshot={snapshot} positionSeconds={positionSeconds} />
+          )}
+          {tabs}
+        </>
+      }
+    >
       {debug && (
         <DebugOverlay
           estimate={snapshot.estimate}
@@ -225,24 +370,38 @@ export function RoomClient() {
           isCreator={isCreator}
         />
       )}
-      <header className="flex animate-rise flex-col gap-2">
-        <Link
-          href="/"
-          className="flex h-11 items-center gap-2 self-start text-sm font-semibold text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft className="size-4" />
-          Rooms
-        </Link>
-        <h1 className="text-4xl font-extrabold break-words sm:text-5xl">{snapshot.roomName}</h1>
-        {snapshot.description && (
-          <p className="max-w-[60ch] text-lg text-muted-foreground">{snapshot.description}</p>
+      <TopBar>
+        {snapshot.mode === 'talk' ? (
+          <Mic className="size-5 shrink-0 text-muted-foreground" />
+        ) : (
+          <Music className="size-5 shrink-0 text-muted-foreground" />
         )}
-      </header>
+        <h1 className="truncate">{snapshot.roomName}</h1>
+        {snapshot.description && (
+          <p className="hidden min-w-0 truncate border-l border-white/20 pl-3 text-sm font-normal text-muted-foreground sm:block">
+            {snapshot.description}
+          </p>
+        )}
+        <span className="ml-auto flex items-center">
+          {sharing}
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="hidden md:inline-flex xl:hidden"
+            aria-label="Show people"
+            aria-pressed={panel === 'aside'}
+            onClick={togglePeople}
+          >
+            <Users />
+          </Button>
+        </span>
+      </TopBar>
 
       {snapshot.ended ? (
         // The roster behind this has no socket keeping it true, so it goes
         // rather than sitting there looking live next to the bad news.
-        <div className={cn(CARD, 'max-w-md animate-pop items-start')}>
+        <div className={cn(CARD, 'mt-2 max-w-md animate-pop items-start')}>
           <DoorOpen className="size-8 text-destructive" />
           <p role="alert" className="text-lg font-semibold">
             {ENDED_MESSAGE[snapshot.ended]}
@@ -252,238 +411,80 @@ export function RoomClient() {
             Back to rooms
           </Link>
         </div>
-      ) : (
-        <div className="grid items-start gap-6 lg:grid-cols-[1fr_20rem]">
-          <div className="flex min-w-0 flex-col gap-6">
-            {/* The one loud thing on the screen, and only while there is
-                something to be loud about. */}
-            <section
-              className={cn(
-                CARD,
-                'animate-rise [animation-delay:60ms]',
-                current && 'border-primary bg-primary text-primary-foreground',
-              )}
-            >
-              <h2 className="flex items-center gap-2 font-bold">
-                <Disc3
-                  className={cn('size-5', playing && 'animate-spin [animation-duration:2.4s]')}
-                />
-                Now playing
-              </h2>
-              {current ? (
-                <>
-                  <p className="flex min-w-0 items-center gap-3 text-2xl font-extrabold sm:text-3xl">
-                    <Equalizer playing={playing} className="h-6 gap-1" />
-                    <span className="truncate">{current.title}</span>
-                  </p>
-                  {/* Shown to listeners too: it is the only sign a member has
-                      that their silent device is in fact playing. */}
-                  {snapshot.currentDuration !== undefined ? (
-                    <TrackProgress
-                      positionSeconds={positionSeconds}
-                      durationSeconds={snapshot.currentDuration}
-                      playing={playing}
-                    />
-                  ) : (
-                    <p className="flex items-center gap-2 text-sm">
-                      <LoaderCircle className="size-4 animate-spin" />
-                      {current.state === 'ready' ? 'Getting ready…' : 'Still downloading this track…'}
-                    </p>
-                  )}
-                  {isCreator && (
-                    <div className="flex flex-wrap gap-2">
-                      <Button
-                        type="button"
-                        className="w-full bg-primary-foreground text-primary sm:w-auto sm:flex-1"
-                        disabled={snapshot.currentDuration === undefined}
-                        onClick={() => (playing ? room.pause() : room.resume())}
-                      >
-                        {playing ? <Pause /> : <Play />}
-                        {playing ? 'Pause' : positionSeconds > 0 ? 'Resume' : 'Play'}
-                      </Button>
-                      <Button type="button" variant="outline" className="flex-1 sm:flex-none" onClick={() => room.restart()}>
-                        <RotateCcw />
-                        Restart
-                      </Button>
-                      <Button type="button" variant="outline" className="flex-1 sm:flex-none" onClick={() => room.stop()}>
-                        <Square />
-                        Stop
-                      </Button>
-                    </div>
-                  )}
-                </>
-              ) : (
-                <p className="text-muted-foreground">
-                  {isCreator
-                    ? 'Nothing yet. Add a track below, then press play on it.'
-                    : 'Nothing yet. The host picks what plays.'}
-                </p>
-              )}
-            </section>
-
-            <section className={cn(CARD, 'animate-rise [animation-delay:120ms]')}>
-              <h2 className="flex items-center gap-2 font-bold">
-                <Music className="size-5" />
-                Playlist
-              </h2>
-              {snapshot.playlist.length > 0 && (
-                <ol className="flex flex-col gap-2">
-                  {snapshot.playlist.map((track, index) => {
-                    const isCurrent = track.id === snapshot.currentTrackId;
-                    return (
-                      <li
-                        key={track.id}
-                        className={cn(
-                          'flex animate-pop flex-wrap items-center gap-x-3 gap-y-2 rounded-lg bg-muted py-2 pr-2 pl-4',
-                          isCurrent && 'ring-2 ring-primary',
-                        )}
-                      >
-                        <span className="w-5 shrink-0 text-sm tabular-nums text-muted-foreground">
-                          {isCurrent ? <Equalizer playing={playing} className="text-primary" /> : index + 1}
-                        </span>
-                        <span className={cn('min-w-0 flex-1 truncate', isCurrent && 'font-bold')}>
-                          {track.title}
-                        </span>
-                        {isCreator ? (
-                          <span className="flex w-full shrink-0 items-center justify-end gap-1 sm:w-auto">
-                            <Button
-                              type="button"
-                              size="icon"
-                              aria-label={`Play ${track.title}`}
-                              onClick={() => void room.playTrack(track.id)}
-                            >
-                              <Play />
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              aria-label={`Move ${track.title} up`}
-                              disabled={index === 0}
-                              onClick={() => room.moveTrack(track.id, -1)}
-                            >
-                              <ChevronUp />
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              aria-label={`Move ${track.title} down`}
-                              disabled={index === snapshot.playlist.length - 1}
-                              onClick={() => room.moveTrack(track.id, 1)}
-                            >
-                              <ChevronDown />
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              aria-label={`Remove ${track.title}`}
-                              onClick={() => room.removeTrack(track.id)}
-                            >
-                              <X />
-                            </Button>
-                          </span>
-                        ) : (
-                          <DownloadStatus track={track} />
-                        )}
-                      </li>
-                    );
-                  })}
-                </ol>
-              )}
-              {isCreator ? (
-                <>
-                  {/* The input is there and focusable, only not drawn: the
-                      label is what is seen, and it shows the input's focus. */}
-                  <label
-                    htmlFor="add-tracks"
-                    className={cn(
-                      buttonVariants({ variant: 'outline' }),
-                      'cursor-pointer self-start has-focus-visible:ring-2 has-focus-visible:ring-ring has-disabled:pointer-events-none has-disabled:opacity-50',
-                    )}
-                  >
-                    {adding ? <LoaderCircle className="animate-spin" /> : <Upload />}
-                    Add tracks
-                    <input
-                      id="add-tracks"
-                      type="file"
-                      accept="audio/*"
-                      multiple
-                      disabled={adding}
-                      className="sr-only"
-                      onChange={(e) => {
-                        void addTracks(e.target.files);
-                        // So choosing the same file again still fires a change.
-                        e.target.value = '';
-                      }}
-                    />
-                  </label>
-                  {adding && <p className="text-sm text-muted-foreground">Checking the file…</p>}
-                  {addError && (
-                    <p role="alert" className="text-sm font-medium text-destructive">
-                      {addError}
-                    </p>
-                  )}
-                </>
-              ) : (
-                snapshot.playlist.length === 0 && (
-                  <p className="text-muted-foreground">The host has not added any tracks yet.</p>
-                )
-              )}
-            </section>
-          </div>
-
-          <div className="flex min-w-0 flex-col gap-6">
-            {/* For as long as the room is live: anyone can join at any point. */}
-            <section className={cn(CARD, 'animate-rise [animation-delay:180ms]')}>
-              <div className="flex items-center justify-between">
-                <h2 className="flex items-center gap-2 font-bold">
-                  <Users className="size-5" />
-                  In the room
-                </h2>
-                {joinUrl && <ShareDialog url={joinUrl} hasPasscode={passcode !== undefined} />}
-              </div>
-              <Roster
-                peers={snapshot.peers}
-                selfPeerId={snapshot.selfPeerId}
-                connections={snapshot.connections}
-                transfers={snapshot.transfers}
-                onKick={isCreator ? (peerId) => room.kick(peerId) : undefined}
-              />
-              <OffsetSlider valueMs={userOffsetMs} onChange={changeUserOffset} />
-            </section>
+      ) : snapshot.mode === 'talk' ? (
+        <div className="flex flex-1 flex-col gap-4 pb-4">
+          <TalkPanel voice={snapshot.voice} people={snapshot.peers.length} />
+          <TalkGrid
+            peers={snapshot.peers}
+            selfPeerId={snapshot.selfPeerId}
+            connections={snapshot.connections}
+            speaking={snapshot.voice.speaking}
+            selfMuted={snapshot.voice.micOn && snapshot.voice.muted}
+            onKick={isCreator ? (peerId) => room.kick(peerId) : undefined}
+          />
+          <div className="glass sticky bottom-3 z-30 mx-auto mt-auto flex max-w-xl flex-wrap items-center justify-center gap-3 rounded-full p-2">
+            {snapshot.voice.micOn ? (
+              <Button
+                type="button"
+                size="lg"
+                variant={snapshot.voice.muted ? 'outline' : 'default'}
+                aria-pressed={snapshot.voice.muted}
+                onClick={() => room.setMuted(!snapshot.voice.muted)}
+              >
+                {snapshot.voice.muted ? <MicOff /> : <Mic />}
+                {snapshot.voice.muted ? 'Unmute' : 'Mute'}
+              </Button>
+            ) : (
+              <Button type="button" size="lg" onClick={() => void room.enableMic()}>
+                <Mic />
+                Turn on microphone
+              </Button>
+            )}
+            <Reactions room={room} names={names} className="flex gap-1" />
           </div>
         </div>
+      ) : (
+        <div
+          className={cn(
+            'relative mb-4 flex min-w-0 flex-col gap-4 rounded-[28px] transition-shadow',
+            dragging && 'ring-4 ring-primary ring-offset-4 ring-offset-background',
+          )}
+          onDragOver={(e) => {
+            if (!isCreator || !e.dataTransfer.types.includes('Files')) return;
+            e.preventDefault();
+            setDragging(true);
+          }}
+          onDragLeave={(e) => {
+            if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false);
+          }}
+          onDrop={(e) => {
+            if (!isCreator) return;
+            e.preventDefault();
+            setDragging(false);
+            void addTracks(e.dataTransfer.files);
+          }}
+        >
+          <Stage
+            room={room}
+            snapshot={snapshot}
+            positionSeconds={positionSeconds}
+            visuals={visuals}
+            onVisuals={changeVisuals}
+            sectionRef={stage}
+          />
+        </div>
       )}
-    </main>
+
+      {/* Everyone else's voice. Rendered whatever the mode shows, so a
+          switch back to music cannot cut a sentence off mid-word. */}
+      {[...snapshot.voice.streams].map(([peerId, stream]) => (
+        <RemoteVoice key={peerId} stream={stream} />
+      ))}
+    </Shell>
   );
 }
 
-const CARD =
-  'flex flex-col gap-4 rounded-xl border-2 border-border bg-card p-5 text-card-foreground shadow-md sm:p-6';
-
-/** Where one track stands on this member's device. */
-function DownloadStatus({ track }: { track: PlaylistItem }) {
-  const className = 'flex h-10 shrink-0 items-center gap-1.5 pr-2 text-sm';
-  if (track.state === 'ready') {
-    return (
-      <span className={className}>
-        <Check className="size-4 animate-pop text-primary" />
-        ready
-      </span>
-    );
-  }
-  if (track.state === 'waiting') {
-    return <span className={cn(className, 'text-muted-foreground')}>waiting</span>;
-  }
-  return (
-    <span className={cn(className, 'tabular-nums text-muted-foreground')}>
-      <LoaderCircle className="size-4 animate-spin" />
-      {Math.round((track.progress ?? 0) * 100)}%
-    </span>
-  );
-}
+const CARD = 'panel flex flex-col gap-4 rounded-[20px] p-5 text-card-foreground sm:p-6';
 
 const ENDED_MESSAGE: Record<Ended, string> = {
   'creator-left': 'This room has ended. The person who created it left.',
@@ -491,3 +492,79 @@ const ENDED_MESSAGE: Record<Ended, string> = {
   'lost-connection': 'Lost the connection to this room. Check the network and rejoin.',
   kicked: 'You were removed from this room by its host.',
 };
+
+/** Music | Talk, as two rows. The creator switches it; everyone else sees which it is. */
+function ModeSwitch({ mode, onChange }: { mode: Mode; onChange?: (mode: Mode) => void }) {
+  const modes = [
+    { mode: 'music', label: 'Music', Icon: Music },
+    { mode: 'talk', label: 'Talk', Icon: Mic },
+  ] as const;
+  if (!onChange) {
+    const { label, Icon } = modes.find((m) => m.mode === mode)!;
+    return (
+      <p className="flex h-11 items-center gap-2 rounded-full bg-white/12 px-4 text-[0.9375rem] font-semibold text-foreground">
+        <Icon className="size-5" />
+        {label} mode
+      </p>
+    );
+  }
+  return (
+    <div role="group" aria-label="Room mode" className="flex flex-col gap-0.5">
+      {modes.map(({ mode: value, label, Icon }) => (
+        <Button
+          key={value}
+          type="button"
+          variant={mode === value ? 'secondary' : 'ghost'}
+          className={cn('justify-start', mode === value && 'text-accent-foreground')}
+          aria-pressed={mode === value}
+          onClick={() => onChange(value)}
+        >
+          <Icon />
+          {label}
+        </Button>
+      ))}
+    </div>
+  );
+}
+
+/** Past this many people each device is uploading this many streams, and phones feel it. */
+const COMFORTABLE_PEOPLE = 8;
+
+/** What talk mode asks of you, and what is wrong when it is not working. */
+function TalkPanel({ voice, people }: { voice: VoiceState; people: number }) {
+  return (
+    <section className="flex animate-rise flex-col gap-2 text-sm text-muted-foreground">
+      <p className="flex items-start gap-2">
+        <Headphones className="mt-0.5 size-5 shrink-0" />
+        Everyone in this room can hear everyone else. Use headphones: speakers next to an open
+        microphone feed back.
+      </p>
+      <p aria-live="polite" className="font-medium text-foreground">
+        {voice.micOn ? (voice.muted ? 'You are muted.' : 'You are live.') : 'You can listen without a microphone.'}
+      </p>
+      {voice.error && (
+        <p role="alert" className="text-sm font-medium text-destructive">
+          {voice.error}
+        </p>
+      )}
+      {people > COMFORTABLE_PEOPLE && (
+        <p>
+          Voice works best with {COMFORTABLE_PEOPLE} people or fewer. Larger rooms may stutter.
+        </p>
+      )}
+    </section>
+  );
+}
+
+/** One person's voice, played. Not drawn: it has nothing to show. */
+function RemoteVoice({ stream }: { stream: MediaStream }) {
+  return (
+    <audio
+      autoPlay
+      playsInline
+      ref={(element) => {
+        if (element && element.srcObject !== stream) element.srcObject = stream;
+      }}
+    />
+  );
+}

@@ -6,6 +6,9 @@ import Link from 'next/link';
 import { ArrowLeft, LoaderCircle, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Backdrop } from '@/components/Backdrop';
+import { RoomPreview } from '@/components/RoomPreview';
+import { Shell, TopBar } from '@/components/Shell';
 import { createRoom } from '@/lib/session';
 
 export default function CreateRoom() {
@@ -43,18 +46,17 @@ export default function CreateRoom() {
   }
 
   return (
-    <main className="mx-auto flex min-h-dvh max-w-5xl flex-col gap-8 px-5 py-6 sm:px-8 sm:py-8">
-      <Link
-        href="/"
-        className="flex h-11 items-center gap-2 self-start text-sm font-semibold text-muted-foreground hover:text-foreground"
-      >
-        <ArrowLeft className="size-4" />
-        Back to rooms
-      </Link>
-
-      <div className="flex w-full max-w-md animate-rise flex-col gap-6 rounded-xl border-2 border-border bg-card p-6 text-card-foreground shadow-lg sm:p-8">
+    <Shell backdrop={<Backdrop title={roomName.trim() || 'party'} still calm />}>
+      <TopBar>
+        <Link href="/" aria-label="Back to rooms" className="flex size-10 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-white/12 hover:text-foreground">
+          <ArrowLeft className="size-5" />
+        </Link>
+        Create a room
+      </TopBar>
+      <div className="grid flex-1 items-start gap-8 p-4 sm:p-8 lg:grid-cols-[27.5rem_1fr]">
+      <div className="glass flex w-full max-w-110 animate-rise flex-col gap-6 rounded-[28px] p-6 text-card-foreground">
         <div className="flex flex-col gap-2">
-          <h1 className="text-4xl font-extrabold">Create a room</h1>
+          <h2 className="text-3xl font-bold tracking-tight">Room details</h2>
           <p className="text-muted-foreground">You add the music once you are inside.</p>
         </div>
 
@@ -128,7 +130,21 @@ export default function CreateRoom() {
           </Button>
         </form>
       </div>
-    </main>
+
+      <aside aria-label="Preview" className="flex animate-rise flex-col gap-3 [animation-delay:100ms]">
+        <p className="text-sm font-semibold text-muted-foreground">How it will look in the room list</p>
+        <div className="max-w-110">
+          <RoomPreview
+            name={roomName}
+            description={description.trim() || undefined}
+            mode="music"
+            memberCount={1}
+            hasPasscode={passcode !== ''}
+          />
+        </div>
+      </aside>
+      </div>
+    </Shell>
   );
 }
 
@@ -147,7 +163,7 @@ function Field({
 }) {
   return (
     <div className="flex flex-col gap-2">
-      <label htmlFor={htmlFor} className="text-sm font-semibold">
+      <label htmlFor={htmlFor} className="text-sm font-semibold text-muted-foreground">
         {label}
       </label>
       {children}

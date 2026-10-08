@@ -1,10 +1,10 @@
 import type { Metadata, Viewport } from 'next';
-import { Bricolage_Grotesque } from 'next/font/google';
+import { Geist } from 'next/font/google';
 import { Toaster } from 'sonner';
 import './globals.css';
 
 // The font theme.css names in --font-sans. Change both together.
-const font = Bricolage_Grotesque({ subsets: ['latin'], variable: '--font-loaded' });
+const font = Geist({ subsets: ['latin'], variable: '--font-loaded' });
 
 export const metadata: Metadata = {
   title: 'rave',
@@ -13,7 +13,7 @@ export const metadata: Metadata = {
 
 export const viewport: Viewport = {
   // theme.css's dark --background. A meta tag cannot read a CSS variable.
-  themeColor: '#0f1424',
+  themeColor: '#0c0c0e',
   width: 'device-width',
   initialScale: 1,
 };

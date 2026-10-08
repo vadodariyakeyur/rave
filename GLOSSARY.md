@@ -49,6 +49,50 @@ _Avoid_: Invite link
 The screen shown on a room's address before a device is in it. Its button is the tap that arms audio, then enters the room.
 _Avoid_: Lobby, landing
 
+## Modes
+
+**Mode**:
+What a room is doing: music or talk. The creator switches it at any time, and the server tells everyone through the roster, so a device that joins later learns it the same way.
+_Avoid_: Type, kind, channel
+
+**Music mode**:
+Every device plays the creator's tracks at the same instant. Members connect only to the creator.
+_Avoid_: Listen mode, playback mode
+
+**Talk mode**:
+Everyone in the room can speak to everyone else, like a group voice call. Every device connects to every other. Switching to it stops the music; the playlist is kept.
+_Avoid_: Voice chat, call, voice mode
+
+**Mute**:
+A device's microphone stays on but sends silence. Letting go of the microphone entirely happens only on leaving talk mode.
+_Avoid_: Hold, disable
+
+## On screen
+
+**Stage**:
+Music mode's main tile: the current track's cover with a ring of bars that move with the sound, its title, how far through it is, and the creator's controls. The room around it is lit by the **Backdrop**; the tile itself is a plain surface, not **Glass**.
+_Avoid_: Player, now-playing card
+
+**Cover**:
+A track's picture: the one inside its file when it has one (MP3, M4A or FLAC), otherwise one generated from its title, so the same title looks the same on every device. A room's card gets a cover generated from its name.
+_Avoid_: Artwork, thumbnail, album art (in code; they are fine in prose)
+
+**Glass**:
+The translucent layer used for navigation and controls: the sidebar, the bars, the player capsule, dialogs. It blurs what is behind it and is never used for content, which is a plain tinted surface; glass does not sit on glass. An approximation of Apple's Liquid Glass, not the material itself.
+_Avoid_: Frosted, blur (in the UI)
+
+**Backdrop**:
+The blurred, slowly turning colour behind the whole window, made from four copies of the current cover (or, with none, the room's own). The glass panels sit on it. It crossfades when the track changes and holds still when nothing is playing or the system asks for less motion.
+_Avoid_: Background, wallpaper
+
+**Visuals**:
+The moving ring of bars around the cover. Drawn on each device from the audio it is playing, so it stays in step without anything being sent. A person can switch it off, and it starts off for anyone who asked their system for less motion.
+_Avoid_: Visualizer (in the UI)
+
+**Reaction**:
+A tap on one of five icons (heart, fire, thumbs-up, party, laugh) that floats up on everyone's screen in the room. One of a fixed few, never text, and limited to five a second per person.
+_Avoid_: Emoji, like
+
 ## Playback
 
 **Track**:

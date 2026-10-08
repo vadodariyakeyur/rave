@@ -37,6 +37,8 @@ const CONNECT_TIMEOUT_MS = 15_000;
 interface Connection {
   pc: RTCPeerConnection;
   channel?: RTCDataChannel;
+  /** The one audio line on this connection, for talk mode. Silent until a track is put on it. */
+  audio?: RTCRtpTransceiver;
   timeout?: ReturnType<typeof setTimeout>;
   /**
    * ICE candidates that arrived before the remote description did. Setting a
@@ -54,7 +56,10 @@ export class Mesh {
   readonly #states = new Map<string, PeerConnectionState>();
   readonly #links = new Map<string, ChannelLink>();
   readonly #listeners = new Set<() => void>();
+  readonly #audioListeners = new Set<(peerId: string, stream: MediaStream | undefined) => void>();
   readonly #unsubscribe: () => void;
+  /** The microphone, if one is on: put on every audio line, now and as they open. */
+  #localAudio: MediaStreamTrack | null = null;
 
   constructor(input: { signaling: Signaling; selfPeerId: string; iceServers: IceServer[] }) {
     this.#signaling = input.signaling;
@@ -81,6 +86,27 @@ export class Mesh {
     let link = this.#links.get(peerId);
     if (!link) this.#links.set(peerId, (link = new ChannelLink()));
     return link;
+  }
+
+  /**
+   * Put the microphone on every connection, or take it off with null.
+   * replaceTrack, not addTrack: the audio line is there from the start, so
+   * turning the mic on or off never renegotiates.
+   */
+  setLocalAudio(track: MediaStreamTrack | null): void {
+    this.#localAudio = track;
+    for (const { audio } of this.#connections.values()) {
+      void audio?.sender.replaceTrack(track).catch(() => {});
+    }
+  }
+
+  /**
+   * Told when a peer's voice arrives, and with undefined when that peer's
+   * connection goes. Returns an unsubscribe.
+   */
+  onRemoteAudio(handler: (peerId: string, stream: MediaStream | undefined) => void): () => void {
+    this.#audioListeners.add(handler);
+    return () => this.#audioListeners.delete(handler);
   }
 
   /** Told whenever a connection state changes. */
@@ -142,7 +168,22 @@ export class Mesh {
       if (this.#states.get(peerId) !== 'connected') this.#setState(peerId, 'failed');
     }, CONNECT_TIMEOUT_MS);
 
+    // The answerer's line comes from the offer, and arrives receive-only
+    // until it says otherwise: without this it hears the other side but
+    // never sends. The event fires before the answer is made.
+    pc.addEventListener('track', (event) => {
+      const { track, transceiver, streams } = event as RTCTrackEvent;
+      if (track.kind !== 'audio') return;
+      connection.audio = transceiver;
+      transceiver.direction = 'sendrecv';
+      if (this.#localAudio) void transceiver.sender.replaceTrack(this.#localAudio).catch(() => {});
+      const stream = streams[0] ?? new MediaStream([track]);
+      for (const listener of [...this.#audioListeners]) listener(peerId, stream);
+    });
+
     if (initiator) {
+      connection.audio = pc.addTransceiver('audio', { direction: 'sendrecv' });
+      if (this.#localAudio) void connection.audio.sender.replaceTrack(this.#localAudio).catch(() => {});
       // Negotiation is driven by the negotiationneeded event rather than
       // called inline: creating the channel below fires it, and so would any
       // later track or channel, so one path covers renegotiation too.
@@ -243,6 +284,7 @@ export class Mesh {
     // The peer is out of the roster entirely, so a 'closed' row would be a
     // row for someone who is not there. Drop it.
     this.#states.delete(peerId);
+    for (const listener of [...this.#audioListeners]) listener(peerId, undefined);
     this.#notify();
   }
 

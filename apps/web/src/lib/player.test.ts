@@ -26,6 +26,17 @@ function sink(startTime = 0) {
     currentTime: startTime,
     sources,
     destination: {} as AudioDestinationNode,
+    createAnalyser() {
+      return {
+        fftSize: 0,
+        smoothingTimeConstant: 0,
+        connect() {},
+        disconnect() {},
+        getByteFrequencyData(out: Uint8Array) {
+          out.fill(200);
+        },
+      } as unknown as AnalyserNode;
+    },
     createBufferSource(): AudioBufferSourceNode {
       const source: FakeSource = {
         buffer: undefined,
@@ -99,6 +110,21 @@ describe('scheduling a start', () => {
     assert.equal(out.last().started?.when, 4.5);
     assert.equal(out.last().started?.offset, 0);
     assert.equal(out.last().connected, true);
+  });
+
+  it('reports the spectrum only while something is playing, and sends the sound through the tap', () => {
+    const out = sink(0);
+    const player = new Player({ every: noTimers, sink: out, track: { id: 't', buffer: buffer(60) }, now: monotonic(0).now });
+    const bins = new Uint8Array(64);
+    assert.equal(player.levels(bins), false, 'nothing playing yet');
+
+    apply(player, { type: 'play', trackId: 't', startAt: 0, fromSeconds: 0 }, 0);
+    assert.equal(player.levels(bins), true);
+    assert.equal(bins[0], 200);
+    assert.equal(out.last().connected, true, 'the source still reaches the output, by way of the tap');
+
+    player.close();
+    assert.equal(player.levels(bins), false);
   });
 
   it('gives two peers with different offsets the same real instant', () => {

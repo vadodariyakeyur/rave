@@ -43,7 +43,7 @@ export function ShareDialog({ url, hasPasscode }: { url: string; hasPasscode: bo
         aria-labelledby="share-title"
         // A click on the backdrop lands on the dialog itself, not on its content.
         onClick={(e) => e.target === dialog.current && dialog.current.close()}
-        className="m-auto w-[calc(100%-2.5rem)] max-w-sm animate-pop rounded-xl border-2 border-border bg-card p-6 text-card-foreground shadow-lg backdrop:bg-black/60"
+        className="glass fixed m-auto w-[calc(100%-2.5rem)] max-w-110 animate-pop rounded-[28px] p-6 text-card-foreground backdrop:bg-black/50"
       >
         <div className="flex flex-col items-center gap-4">
           <div className="flex w-full items-center justify-between">

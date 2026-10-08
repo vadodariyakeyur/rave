@@ -23,6 +23,9 @@ function send(socket: WebSocket, msg: ServerMessage): void {
 
 const MAX_WRONG_PASSCODES = 5;
 
+/** A reaction is a tap, and a tap held down is not worth fanning out to a room. */
+const MAX_REACTIONS_PER_SECOND = 5;
+
 /** A connection handler over one hub, with its own socket table. */
 export function connectionHandler(hub: RoomHub): (socket: WebSocket) => void {
   /**
@@ -79,6 +82,9 @@ export function connectionHandler(hub: RoomHub): (socket: WebSocket) => void {
     // reconnect costs the guesser a handshake.
     let wrongPasscodes = 0;
 
+    // When this socket's recent reactions were sent, newest last.
+    const reactions: number[] = [];
+
     socket.on('message', (raw: Buffer) => {
       const msg = parseClientMessage(raw.toString());
       // Unparseable input is dropped, not trusted.
@@ -89,6 +95,14 @@ export function connectionHandler(hub: RoomHub): (socket: WebSocket) => void {
           message: 'Message could not be understood.',
         });
         return;
+      }
+
+      if (msg.type === 'react') {
+        const now = Date.now();
+        while (reactions.length > 0 && now - reactions[0]! >= 1000) reactions.shift();
+        // Over the limit is dropped, not answered: nothing here is worth an error.
+        if (reactions.length >= MAX_REACTIONS_PER_SECOND) return;
+        reactions.push(now);
       }
 
       const outcome = hub.handle(peerId, msg);

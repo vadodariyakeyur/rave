@@ -85,8 +85,14 @@ export const NUDGE_RATE = 0.002;
 export interface AudioSink {
   readonly currentTime: number;
   createBufferSource(): AudioBufferSourceNode;
+  /** For the ring of bars. A tap on the way to the output, which changes nothing about what is heard. */
+  createAnalyser(): AnalyserNode;
   readonly destination: AudioDestinationNode;
 }
+
+/** What the ring of bars is drawn from: 256 samples, so 128 frequency bins about 190 Hz apart. */
+export const ANALYSER_FFT = 256;
+export const ANALYSER_BINS = ANALYSER_FFT / 2;
 
 /** Reading the monotonic clock. Same seam as clock.ts, same reason. */
 export type Now = () => number;
@@ -161,6 +167,8 @@ export class Player {
   #clockOffsetMs: number | undefined;
   /** The listener's own nudge, in ms. Negative plays earlier. */
   #userOffsetMs = 0;
+  /** Between every source and the output, so the screen can see what is playing. Made on first play. */
+  #analyser: AnalyserNode | undefined;
   /** Cancels the drift check, which runs only while there is a source. */
   #stopCorrecting: (() => void) | undefined;
   #closed = false;
@@ -302,9 +310,40 @@ export class Player {
     this.#play(this.#playing);
   }
 
+  /**
+   * The current spectrum, ANALYSER_BINS bins of 0 to 255, written into the caller's
+   * array. False when nothing is playing, so a screen can tell silence
+   * from not looking. Same shape as position(): read it on a tick.
+   */
+  levels(out: Uint8Array): boolean {
+    if (!this.#analyser || !this.#source) return false;
+    this.#analyser.getByteFrequencyData(out as Uint8Array<ArrayBuffer>);
+    return true;
+  }
+
+  /** Where every source plugs in. One analyser for the player's life. */
+  #tap(): AudioNode {
+    if (!this.#analyser) {
+      const analyser = this.#sink.createAnalyser();
+      // Fine enough to tell a kick from a bass line, small enough for a phone.
+      analyser.fftSize = ANALYSER_FFT;
+      // Quick to follow, since the ring does its own smoothing and rate limit.
+      analyser.smoothingTimeConstant = 0.5;
+      // Up to 0 dB, not the default -30: a steady bass line sits near -20 and
+      // would otherwise be pinned at the top, leaving a kick nothing to rise to.
+      analyser.minDecibels = -90;
+      analyser.maxDecibels = 0;
+      analyser.connect(this.#sink.destination);
+      this.#analyser = analyser;
+    }
+    return this.#analyser;
+  }
+
   close(): void {
     this.#closed = true;
     this.#stopSource();
+    this.#analyser?.disconnect();
+    this.#analyser = undefined;
     this.#idle();
     this.#held = undefined;
     this.#listeners.clear();
@@ -364,7 +403,7 @@ export class Player {
 
     const source = this.#sink.createBufferSource();
     source.buffer = buffer;
-    source.connect(this.#sink.destination);
+    source.connect(this.#tap());
 
     // The audio clock and the monotonic clock are different clocks; this is
     // the one conversion between them, and it is why scheduling is sample

@@ -90,6 +90,13 @@ export type Description = z.infer<typeof Description>;
 export const Passcode = z.string().min(4).max(32);
 export type Passcode = z.infer<typeof Passcode>;
 
+/**
+ * What a room is doing: playing the creator's tracks in sync, or letting
+ * everyone talk to everyone. The creator switches it, at any time.
+ */
+export const Mode = z.enum(['music', 'talk']);
+export type Mode = z.infer<typeof Mode>;
+
 /** A peer as everyone in the room sees them. */
 export const Peer = z.object({
   peerId: z.uuid(),
@@ -152,6 +159,35 @@ export const NowPlaying = z.object({
 export type NowPlaying = z.infer<typeof NowPlaying>;
 
 /**
+ * A reaction is one of a fixed few, never free text: it is relayed to a whole
+ * room, and a fixed set is something the server can relay without reading.
+ */
+export const Reaction = z.enum(['heart', 'fire', 'thumbs-up', 'party', 'laugh']);
+export type Reaction = z.infer<typeof Reaction>;
+
+/** Client -> server. Show everyone else in the room this reaction, from me. */
+export const React = z.object({
+  type: z.literal('react'),
+  reaction: Reaction,
+});
+export type React = z.infer<typeof React>;
+
+/** Server -> client. Someone in the room reacted. The server stamps `from`. */
+export const ReactionFrom = z.object({
+  type: z.literal('reaction'),
+  from: z.uuid(),
+  reaction: Reaction,
+});
+export type ReactionFrom = z.infer<typeof ReactionFrom>;
+
+/** Client -> server. The creator switches the room between music and talk. */
+export const SetMode = z.object({
+  type: z.literal('set-mode'),
+  mode: Mode,
+});
+export type SetMode = z.infer<typeof SetMode>;
+
+/**
  * Client -> server, then server -> client, relayed to one named peer.
  *
  * The payload is opaque on purpose: it carries SDP and ICE candidates whose
@@ -191,6 +227,7 @@ export const RoomState = z.object({
   code: RoomCode,
   roomName: RoomName,
   description: Description,
+  mode: Mode,
   peers: z.array(Peer),
 });
 export type RoomState = z.infer<typeof RoomState>;
@@ -202,6 +239,7 @@ export const RoomSummary = z.object({
   description: Description,
   memberCount: z.number().int().nonnegative(),
   hasPasscode: z.boolean(),
+  mode: Mode,
   nowPlaying: z.string().nullable(),
 });
 export type RoomSummary = z.infer<typeof RoomSummary>;
@@ -265,6 +303,8 @@ export const ClientMessage = z.discriminatedUnion('type', [
   WatchRooms,
   Kick,
   NowPlaying,
+  SetMode,
+  React,
 ]);
 export type ClientMessage = z.infer<typeof ClientMessage>;
 
@@ -277,6 +317,7 @@ export const ServerMessage = z.discriminatedUnion('type', [
   RoomList,
   RoomClosed,
   SignalFrom,
+  ReactionFrom,
   ErrorMessage,
 ]);
 export type ServerMessage = z.infer<typeof ServerMessage>;

@@ -1,4 +1,4 @@
-import { describe, it } from 'node:test';
+import { describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import type { ClientMessage, Peer, RoomState, ServerMessage } from '@rave/protocol';
 import { DECODE_ERROR } from './audio.ts';
@@ -30,11 +30,12 @@ const peer = (peerId: string): Peer => ({
   isCreator: peerId === HOST,
 });
 
-const roster = (peerIds: string[]): RoomState => ({
+const roster = (peerIds: string[], mode: RoomState['mode'] = 'music'): RoomState => ({
   type: 'room-state',
   code: 'ABC234',
   roomName: 'Kitchen',
   description: 'Friday',
+  mode,
   peers: peerIds.map(peer),
 });
 
@@ -78,6 +79,13 @@ class RoomMesh extends FakeMesh {
   sync(peers: readonly Peer[]): void {
     this.synced.push(peers.map((p) => p.peerId));
   }
+  readonly localAudio: (MediaStreamTrack | null)[] = [];
+  setLocalAudio(track: MediaStreamTrack | null): void {
+    this.localAudio.push(track);
+  }
+  onRemoteAudio(): () => void {
+    return () => {};
+  }
   close(): void {
     this.closed = true;
   }
@@ -107,6 +115,9 @@ function audio() {
     closed: false,
     /** Lengths, by how many bytes the encoded file had. Missing means it will not decode. */
     durations: new Map<number, number>(),
+    createAnalyser() {
+      return { fftSize: 0, smoothingTimeConstant: 0, connect() {}, disconnect() {}, getByteFrequencyData() {} };
+    },
     createBufferSource() {
       const source = {
         buffer: null as unknown,
@@ -150,14 +161,19 @@ const B = { title: 'b.mp3', byteLength: 20_000, duration: 120 };
 const file = (track: { title: string; byteLength: number }) =>
   ({ name: track.title, arrayBuffer: async () => bytes(track.byteLength) }) as unknown as File;
 
-function setup(self: string, peerIds: string[], passcode?: string) {
+function setup(
+  self: string,
+  peerIds: string[],
+  passcode?: string,
+  readArt: RoomDeps['readArt'] = async () => undefined,
+) {
   const signaling = new FakeSignaling();
   const mesh = new RoomMesh();
   const out = audio();
   out.durations.set(A.byteLength, A.duration).set(B.byteLength, B.duration);
   const clock = virtualClock(1_000);
   let minted = 0;
-  const deps: RoomDeps = { createMesh: () => mesh, clock, every: noTimers, id: () => `t${++minted}` };
+  const deps: RoomDeps = { createMesh: () => mesh, clock, every: noTimers, id: () => `t${++minted}`, readArt };
   const room = new LiveRoom(
     {
       signaling,
@@ -412,6 +428,31 @@ describe('the creator', () => {
     assert.equal(pong?.t1, 1_000, 'on its own clock, which is the reference');
   });
 
+  it('switches to talk by stopping the music for everyone and then telling the server', async () => {
+    const { room, signaling, wires } = await creator();
+    room.setMode('talk');
+    assert.deepEqual(signaling.sent.at(-1), { type: 'set-mode', mode: 'talk' });
+    const { near } = wires.get(GUEST)!;
+    assert.equal(near.messages().some((m) => m.type === 'stop'), true, 'the room goes quiet first');
+
+    // The server's word is what changes the mode, not our asking.
+    assert.equal(room.snapshot().mode, 'music');
+    signaling.deliver(roster([HOST, GUEST], 'talk'));
+    assert.equal(room.snapshot().mode, 'talk');
+  });
+
+  it('asks for nothing when the room is already in that mode', async () => {
+    const { room, signaling } = await creator();
+    room.setMode('music');
+    assert.deepEqual(signaling.sent, []);
+  });
+
+  it('connects to every member in music and in talk', async () => {
+    const { mesh, signaling } = await creator([GUEST, THIRD]);
+    signaling.deliver(roster([HOST, GUEST, THIRD], 'talk'));
+    assert.deepEqual(mesh.synced.at(-1), [HOST, GUEST, THIRD]);
+  });
+
   it('asks the server to remove a member', async () => {
     const { room, signaling } = await creator();
     room.kick(GUEST);
@@ -424,6 +465,101 @@ describe('the creator', () => {
     await room.playTrack('t1');
     room.setUserOffset(-200);
     assert.equal(out.sources.length, 2, 'heard now, not at the next cue');
+  });
+});
+
+describe('pictures and reactions', () => {
+  it('gives a track the picture read from its file, and lets go of it when the track goes', async () => {
+    const revoke = mock.method(URL, 'revokeObjectURL', () => {});
+    try {
+      const { room } = setup(HOST, [HOST], undefined, async () => ({ url: 'blob:cover' }));
+      await room.addTracks([file(A)]);
+      await settle();
+      assert.equal(room.snapshot().playlist[0]?.art?.url, 'blob:cover');
+
+      room.removeTrack('t1');
+      assert.deepEqual(revoke.mock.calls.map((c) => c.arguments[0]), ['blob:cover']);
+      assert.equal(room.snapshot().playlist.length, 0);
+    } finally {
+      revoke.mock.restore();
+    }
+  });
+
+  it('leaves a track with no picture as it is', async () => {
+    const { room } = setup(HOST, [HOST]);
+    await room.addTracks([file(A)]);
+    await settle();
+    assert.equal(room.snapshot().playlist[0]?.art, undefined);
+  });
+
+  it('throws away a picture that finishes after its track was removed', async () => {
+    const revoke = mock.method(URL, 'revokeObjectURL', () => {});
+    try {
+      let finish!: (art: { url: string }) => void;
+      const { room } = setup(HOST, [HOST], undefined, () => new Promise((resolve) => (finish = resolve)));
+      await room.addTracks([file(A)]);
+      room.removeTrack('t1');
+      finish({ url: 'blob:late' });
+      await settle();
+      assert.deepEqual(revoke.mock.calls.map((c) => c.arguments[0]), ['blob:late']);
+      assert.equal(room.snapshot().playlist.length, 0);
+    } finally {
+      revoke.mock.restore();
+    }
+  });
+
+  it('sends a reaction to the server and shows it here at once', () => {
+    const { room, signaling } = setup(HOST, [HOST, GUEST]);
+    const seen: { from: string; reaction: string }[] = [];
+    room.onReaction((e) => seen.push(e));
+    room.react('fire');
+    assert.deepEqual(signaling.sent.at(-1), { type: 'react', reaction: 'fire' });
+    assert.deepEqual(seen, [{ from: HOST, reaction: 'fire' }]);
+  });
+
+  it('shows what others send, until the listener lets go or the room ends', () => {
+    const { room, signaling } = setup(GUEST, [HOST, GUEST]);
+    const seen: string[] = [];
+    const stop = room.onReaction((e) => seen.push(`${e.from.slice(0, 1)}:${e.reaction}`));
+    signaling.deliver({ type: 'reaction', from: HOST, reaction: 'heart' });
+    stop();
+    signaling.deliver({ type: 'reaction', from: HOST, reaction: 'laugh' });
+    assert.deepEqual(seen, ['1:heart']);
+
+    room.onReaction((e) => seen.push(e.reaction));
+    signaling.deliver({ type: 'room-closed', code: 'ABC234', reason: 'creator-left' });
+    signaling.deliver({ type: 'reaction', from: HOST, reaction: 'party' });
+    assert.equal(seen.includes('party'), false);
+    room.react('fire');
+    assert.equal(signaling.sent.some((m) => m.type === 'react'), false, 'nothing sent into a dead room');
+  });
+});
+
+describe('a member in talk mode', () => {
+  it('stays linked to the creator alone in music, and to everyone once the room is talking', () => {
+    const { mesh, signaling, room } = setup(GUEST, [HOST, GUEST, THIRD]);
+    assert.deepEqual(mesh.synced.at(-1), [HOST, GUEST]);
+
+    signaling.deliver(roster([HOST, GUEST, THIRD], 'talk'));
+    assert.deepEqual(mesh.synced.at(-1), [HOST, GUEST, THIRD]);
+    assert.equal(room.snapshot().mode, 'talk');
+
+    signaling.deliver(roster([HOST, GUEST, THIRD], 'music'));
+    assert.deepEqual(mesh.synced.at(-1), [HOST, GUEST], 'back to the creator alone');
+  });
+
+  it('cannot switch the room', () => {
+    const { room, signaling } = setup(GUEST, [HOST, GUEST]);
+    room.setMode('talk');
+    assert.deepEqual(signaling.sent, []);
+  });
+
+  it('only asks for the microphone while the room is talking', async () => {
+    const { room, signaling } = setup(GUEST, [HOST, GUEST]);
+    await room.enableMic();
+    assert.equal(room.snapshot().voice.micOn, false);
+    assert.equal(room.snapshot().voice.error, undefined, 'music mode never even asked');
+    signaling.deliver(roster([HOST, GUEST], 'talk'));
   });
 });
 

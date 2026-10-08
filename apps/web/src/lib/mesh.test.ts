@@ -36,6 +36,19 @@ class FakePeerConnection {
   emit(type: string, ev: unknown = {}): void {
     for (const fn of this.#listeners.get(type) ?? []) fn(ev);
   }
+  readonly transceivers: { sender: { replaced: (MediaStreamTrack | null)[]; replaceTrack(t: MediaStreamTrack | null): Promise<void> }; direction: string }[] = [];
+  addTransceiver(kind: string, init?: { direction: string }) {
+    assert.equal(kind, 'audio');
+    const sender = {
+      replaced: [] as (MediaStreamTrack | null)[],
+      async replaceTrack(track: MediaStreamTrack | null) {
+        sender.replaced.push(track);
+      },
+    };
+    const transceiver = { sender, direction: init?.direction ?? 'sendrecv' };
+    this.transceivers.push(transceiver);
+    return transceiver;
+  }
   readonly channelOptions: (RTCDataChannelInit | undefined)[] = [];
   createDataChannel(_label: string, options?: RTCDataChannelInit): FakeChannel {
     const channel = new FakeChannel('connecting');

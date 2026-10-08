@@ -63,6 +63,9 @@ class FakeContext {
   createBuffer(): unknown {
     return { duration: 0 };
   }
+  createAnalyser(): unknown {
+    return { connect: () => {}, disconnect: () => {} };
+  }
   createBufferSource(): unknown {
     return { buffer: null, connect: () => {}, start: () => {} };
   }
@@ -87,6 +90,9 @@ class FakePeerConnection {
   addEventListener(): void {}
   createDataChannel(): FakeChannel {
     return new FakeChannel('connecting');
+  }
+  addTransceiver() {
+    return { sender: { replaceTrack: async () => {} }, direction: 'sendrecv' };
   }
   close(): void {}
 }
@@ -147,6 +153,7 @@ describe('createRoom', () => {
       code: 'RW53NG',
       roomName: 'Kitchen',
       description: 'Friday',
+      mode: 'music',
       peers: [
         { peerId: OTHER, displayName: 'Someone else', isCreator: false },
         { peerId: CREATOR, displayName: 'Keyur', isCreator: true },
@@ -197,6 +204,7 @@ describe('joinRoom', () => {
       code: 'ABC234',
       roomName: 'Kitchen',
       description: '',
+      mode: 'music',
       peers: [
         { peerId: CREATOR, displayName: 'Keyur', isCreator: true },
         { peerId: OTHER, displayName: 'Sam', isCreator: false },
@@ -242,6 +250,7 @@ describe('joinRoom', () => {
       code,
       roomName: 'Kitchen',
       description: '',
+      mode: 'music',
       peers: [{ peerId: OTHER, displayName: 'Sam', isCreator: false }],
     });
     const first = joinRoom({ code: 'ABC234', displayName: 'Sam' });

@@ -1,13 +1,17 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, ArrowRight, LoaderCircle, Lock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { decodePasscode } from '@/lib/passcode';
+import { Backdrop } from '@/components/Backdrop';
+import { RoomPreview } from '@/components/RoomPreview';
+import { Shell, TopBar } from '@/components/Shell';
 import { joinRoom } from '@/lib/session';
-import { EnterRefused } from '@/lib/signaling';
+import { EnterRefused, Signaling } from '@/lib/signaling';
+import type { RoomSummary } from '@rave/protocol';
 
 /**
  * The passcode a share link or QR carries, if it carries one.
@@ -26,9 +30,10 @@ function linkedPasscode(): string | undefined {
  * device that is joined and silent at playback with no recovery, so there is
  * no path into a room that skips this screen — a refresh lands here again.
  *
- * Only the code is shown: the room name lives on the server, and asking for
- * it before joining would mean a lookup round-trip for every typo. An unknown
- * code is reported here, after the tap.
+ * The room is shown as the room list shows it, found by its code in that
+ * list, so a person can see what they are about to join without anything new
+ * on the server. A code not in the list (a typo, a room that just ended)
+ * shows nothing here and is reported after the tap.
  */
 export function PreJoin({ code, locked }: { code: string; locked: boolean }) {
   const [displayName, setDisplayName] = useState('');
@@ -38,6 +43,17 @@ export function PreJoin({ code, locked }: { code: string; locked: boolean }) {
   const [askPasscode, setAskPasscode] = useState(locked);
   const [error, setError] = useState<string | null>(null);
   const [joining, setJoining] = useState(false);
+
+  const [rooms, setRooms] = useState<RoomSummary[] | undefined>(undefined);
+  useEffect(() => {
+    const signaling = new Signaling();
+    const stop = signaling.watchRooms(setRooms);
+    return () => {
+      stop();
+      signaling.close();
+    };
+  }, []);
+  const room = rooms?.find((r) => r.code === code);
 
   async function join(event: React.FormEvent) {
     event.preventDefault();
@@ -62,21 +78,32 @@ export function PreJoin({ code, locked }: { code: string; locked: boolean }) {
   }
 
   return (
-    <main className="mx-auto flex min-h-dvh max-w-5xl flex-col gap-8 px-5 py-6 sm:px-8 sm:py-8">
-      <Link
-        href="/"
-        className="flex h-11 items-center gap-2 self-start text-sm font-semibold text-muted-foreground hover:text-foreground"
-      >
-        <ArrowLeft className="size-4" />
-        Back to rooms
-      </Link>
-
-      <div className="flex w-full max-w-md animate-rise flex-col gap-6 rounded-xl border-2 border-border bg-card p-6 text-card-foreground shadow-lg sm:p-8">
-        <h1 className="text-4xl font-extrabold">Join the room</h1>
+    <Shell backdrop={<Backdrop title={room?.roomName ?? 'party'} still calm />}>
+      <TopBar>
+        <Link href="/" aria-label="Back to rooms" className="flex size-10 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-white/12 hover:text-foreground">
+          <ArrowLeft className="size-5" />
+        </Link>
+        Join a room
+      </TopBar>
+      <div className="grid flex-1 place-items-start justify-items-center p-4 sm:p-8">
+      <div className="flex w-full max-w-110 animate-rise flex-col gap-6 rounded-[28px] glass p-6 text-card-foreground">
+        <h1 className="text-3xl font-bold tracking-tight">Join the room</h1>
+        {room && (
+          <div>
+            <RoomPreview
+              name={room.roomName}
+              description={room.description}
+              mode={room.mode}
+              memberCount={room.memberCount}
+              hasPasscode={room.hasPasscode}
+              nowPlaying={room.nowPlaying}
+            />
+          </div>
+        )}
 
         <form onSubmit={join} className="flex flex-col gap-5">
           <div className="flex flex-col gap-2">
-            <label htmlFor="display-name" className="text-sm font-semibold">
+            <label htmlFor="display-name" className="text-sm font-semibold text-muted-foreground">
               Your name
             </label>
             <Input
@@ -90,7 +117,7 @@ export function PreJoin({ code, locked }: { code: string; locked: boolean }) {
 
           {askPasscode && (
             <div className="flex animate-pop flex-col gap-2">
-              <label htmlFor="passcode" className="flex items-center gap-1.5 text-sm font-semibold">
+              <label htmlFor="passcode" className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground">
                 <Lock className="size-4" />
                 Room passcode
               </label>
@@ -116,6 +143,7 @@ export function PreJoin({ code, locked }: { code: string; locked: boolean }) {
           </Button>
         </form>
       </div>
-    </main>
+      </div>
+    </Shell>
   );
 }
