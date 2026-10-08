@@ -24,12 +24,12 @@ export default function Home() {
     try {
       // Must stay synchronous up to here: createRoom opens the AudioContext,
       // and this submit is the user gesture that lets it start.
-      const session = await createRoom({
+      const room = await createRoom({
         roomName: roomName.trim(),
         displayName: displayName.trim(),
         file,
       });
-      router.push(`/room/${session.code}`);
+      router.push(`/room/${room.snapshot().code}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not create the room.');
       setCreating(false);

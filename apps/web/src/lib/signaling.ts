@@ -3,36 +3,122 @@
 import {
   parseServerMessage,
   type ClientMessage,
+  type CreateRoom,
+  type IceServer,
+  type JoinRoom,
+  type RoomState,
   type ServerMessage,
 } from '@rave/protocol';
 
+/** One wording for a socket that went away before the room was entered. */
+export const CONNECTION_LOST = 'Lost the connection to the server. Check the network and try again.';
+
 /**
- * Thin WebSocket wrapper over the protocol package. Same-origin: Caddy
- * proxies /ws to `realtime`, so there is no host to configure and no
- * mixed-content hazard on the LAN.
+ * What entering a room settles: who we are, who is here, and how to reach
+ * them. Three messages on the wire, one answer here.
+ */
+export interface Entered {
+  peerId: string;
+  /**
+   * From server-hello, so a STUN change is a restart of `realtime` rather
+   * than a rebuild of the web image.
+   */
+  iceServers: IceServer[];
+  state: RoomState;
+}
+
+/** The slice of WebSocket this needs — which the real one already is. */
+export type SignalingSocket = Pick<
+  WebSocket,
+  'readyState' | 'send' | 'close' | 'addEventListener' | 'removeEventListener'
+>;
+
+/** WebSocket.OPEN, spelled out: the global does not exist where tests run. */
+const OPEN = 1;
+
+/**
+ * Same-origin: Caddy proxies /ws to `realtime`, so there is no host to
+ * configure and no mixed-content hazard on the LAN.
+ */
+function openSocket(): SignalingSocket {
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return new WebSocket(`${proto}//${window.location.host}/ws`);
+}
+
+/**
+ * The server wire, from this side: the protocol package over one socket,
+ * and the handshake that turns a socket into a place in a room.
  */
 export class Signaling {
-  readonly #socket: WebSocket;
+  readonly #socket: SignalingSocket;
   readonly #queue: string[] = [];
   readonly #handlers = new Set<(msg: ServerMessage) => void>();
 
-  constructor() {
-    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    this.#socket = new WebSocket(`${proto}//${window.location.host}/ws`);
+  /** The socket is taken, not made, so a test can hand in its own. */
+  constructor(socket: SignalingSocket = openSocket()) {
+    this.#socket = socket;
     this.#socket.addEventListener('open', () => {
       for (const raw of this.#queue.splice(0)) this.#socket.send(raw);
     });
     this.#socket.addEventListener('message', (event) => {
-      const msg = parseServerMessage(String(event.data));
+      const msg = parseServerMessage(String((event as MessageEvent).data));
       // Anything that fails the schema is not ours to act on.
       if (!msg) return;
-      for (const handler of this.#handlers) handler(msg);
+      for (const handler of [...this.#handlers]) handler(msg);
     });
   }
 
   /**
-   * Returns an unsubscribe. A single slot would let the room page silently
-   * replace the create page's handler, so listeners are explicit about their
+   * Create or join, and wait until the room is actually entered.
+   *
+   * The server answers with our own peer id (room-created or room-joined)
+   * and then the roster. Neither alone is enough: the roster does not say
+   * which peer we are, and the identity does not carry the roster. The ICE
+   * list rode in earlier on server-hello.
+   *
+   * A refusal or a dropped socket rejects and closes the socket — nothing
+   * was entered, so there is nothing to keep. On success the handshake's own
+   * listeners are gone before this resolves: whoever takes the room next
+   * subscribes for themselves.
+   */
+  enter(request: CreateRoom | JoinRoom): Promise<Entered> {
+    return new Promise<Entered>((resolve, reject) => {
+      const fail = (err: Error) => {
+        unsubscribe();
+        this.close();
+        reject(err);
+      };
+      const unsubscribeClose = this.onClose(() => fail(new Error(CONNECTION_LOST)));
+
+      let peerId: string | undefined;
+      let iceServers: IceServer[] = [];
+      const unsubscribeMessage = this.onMessage((msg) => {
+        if (msg.type === 'error') return fail(new Error(msg.message));
+        if (msg.type === 'server-hello') {
+          iceServers = msg.iceServers;
+          return;
+        }
+        if (msg.type === 'room-created' || msg.type === 'room-joined') {
+          peerId = msg.peerId;
+          return;
+        }
+        if (msg.type !== 'room-state' || peerId === undefined) return;
+        unsubscribe();
+        resolve({ peerId, iceServers, state: msg });
+      });
+
+      function unsubscribe(): void {
+        unsubscribeClose();
+        unsubscribeMessage();
+      }
+
+      this.send(request);
+    });
+  }
+
+  /**
+   * Returns an unsubscribe. A single slot would let the room silently
+   * replace the handshake's handler, so listeners are explicit about their
    * own lifetime instead.
    */
   onMessage(handler: (msg: ServerMessage) => void): () => void {
@@ -52,7 +138,7 @@ export class Signaling {
   /** Buffers until the socket opens, so callers never race the handshake. */
   send(msg: ClientMessage): void {
     const raw = JSON.stringify(msg);
-    if (this.#socket.readyState === WebSocket.OPEN) this.#socket.send(raw);
+    if (this.#socket.readyState === OPEN) this.#socket.send(raw);
     else this.#queue.push(raw);
   }
 

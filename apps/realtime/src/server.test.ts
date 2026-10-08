@@ -1,8 +1,11 @@
-import { describe, it } from 'node:test';
+import { beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import type { WebSocket } from 'ws';
 import { parseServerMessage, type ServerMessage } from '@rave/protocol';
-import { handleConnection, metrics, rooms } from './server.ts';
+import { RoomHub } from './hub.ts';
+import { Metrics } from './metrics.ts';
+import { RoomRegistry } from './rooms.ts';
+import { connectionHandler } from './server.ts';
 
 /**
  * A socket that records what the server sent it and lets a test push a
@@ -54,6 +57,16 @@ class FakeSocket {
     return found as Extract<ServerMessage, { type: T }>;
   }
 }
+
+// A server per test: no room, socket or histogram count carries over.
+let metrics: Metrics;
+let handleConnection: (socket: WebSocket) => void;
+
+beforeEach(() => {
+  const rooms = new RoomRegistry();
+  metrics = new Metrics(rooms);
+  handleConnection = connectionHandler(new RoomHub({ rooms, metrics }));
+});
 
 function connect(): FakeSocket {
   const socket = new FakeSocket();

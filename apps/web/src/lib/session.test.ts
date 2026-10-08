@@ -1,12 +1,14 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { createRoom, joinRoom, getSession, setSession } from './session.ts';
+import { createRoom, joinRoom, getRoom, setRoom } from './session.ts';
+import { FakeChannel } from './testing.ts';
 
 /**
  * The invariant this ticket exists for: a file that cannot be decoded must
  * never produce a room, because a room code issued for unplayable audio
- * strands everyone who joins it. Web Audio and WebSocket do not exist in
- * Node, so both are stubbed at the global the code actually reaches for.
+ * strands everyone who joins it. Web Audio, WebSocket and WebRTC do not
+ * exist in Node, so each is stubbed at the global the code actually reaches
+ * for.
  */
 
 // Real uuids: the protocol schema rejects anything else, so a readable
@@ -77,6 +79,18 @@ class FakeContext {
 
 let decodeResult: () => unknown;
 
+/**
+ * Entering a room starts its mesh, which opens a connection per peer in the
+ * roster. Nothing here negotiates; it only has to be constructible.
+ */
+class FakePeerConnection {
+  addEventListener(): void {}
+  createDataChannel(): FakeChannel {
+    return new FakeChannel('connecting');
+  }
+  close(): void {}
+}
+
 /** Lets the arm + decode + connect chain settle before inspecting the socket. */
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -92,15 +106,17 @@ beforeEach(() => {
   decodeResult = () => ({ duration: 12.5 });
   globals['AudioContext'] = FakeContext;
   globals['WebSocket'] = FakeSocket;
+  globals['RTCPeerConnection'] = FakePeerConnection;
   globals['window'] = { location: { host: 'rave.local', protocol: 'https:' } };
-  setSession(undefined);
+  setRoom(undefined);
 });
 
 afterEach(() => {
   delete globals['AudioContext'];
   delete globals['WebSocket'];
+  delete globals['RTCPeerConnection'];
   delete globals['window'];
-  setSession(undefined);
+  setRoom(undefined);
 });
 
 describe('createRoom', () => {
@@ -115,7 +131,7 @@ describe('createRoom', () => {
 
     // The whole point of the decode gate: no socket, so no room, so no code.
     assert.equal(sockets.length, 0);
-    assert.equal(getSession(), undefined);
+    assert.equal(getRoom(), undefined);
     assert.equal(contexts[0]?.closed, true);
   });
 
@@ -154,11 +170,13 @@ describe('createRoom', () => {
       ],
     });
 
-    const session = await pending;
+    const room = await pending;
     // Identity comes from room-created, not from roster position.
-    assert.equal(session.peerId, CREATOR);
-    assert.equal(session.code, 'RW53NG');
-    assert.equal(getSession()?.peerId, CREATOR);
+    assert.equal(room.snapshot().selfPeerId, CREATOR);
+    assert.equal(room.snapshot().isCreator, true);
+    assert.equal(room.snapshot().code, 'RW53NG');
+    assert.deepEqual(room.snapshot().track, { fileName: 'track.mp3', durationSeconds: 12.5 });
+    assert.equal(getRoom(), room);
   });
 
   it('rejects and closes everything when the server refuses', async () => {
@@ -169,7 +187,7 @@ describe('createRoom', () => {
     socket.deliver({ type: 'error', code: 'invalid-request', message: 'Nope.' });
 
     await assert.rejects(pending, { message: 'Nope.' });
-    assert.equal(getSession(), undefined);
+    assert.equal(getRoom(), undefined);
     assert.equal(socket.readyState, 3);
     assert.equal(contexts[0]?.closed, true);
   });
@@ -199,11 +217,12 @@ describe('joinRoom', () => {
       ],
     });
 
-    const session = await promise;
-    assert.equal(session.peerId, OTHER);
-    // The joiner has nothing to play yet; the transfer is #5.
-    assert.equal(session.buffer, undefined);
-    assert.equal(getSession()?.peerId, OTHER);
+    const room = await promise;
+    assert.equal(room.snapshot().selfPeerId, OTHER);
+    assert.equal(room.snapshot().isCreator, false);
+    // The joiner has nothing to play yet; the file comes from the creator.
+    assert.equal(room.snapshot().track, undefined);
+    assert.equal(getRoom(), room);
   });
 
   it('rejects an unknown code and leaves no session behind', async () => {
@@ -217,7 +236,7 @@ describe('joinRoom', () => {
     });
 
     await assert.rejects(promise, /No room with that code/);
-    assert.equal(getSession(), undefined);
+    assert.equal(getRoom(), undefined);
     assert.equal(contexts[0]!.closed, true);
   });
   it('refuses a malformed code without opening a socket or a context', async () => {
@@ -226,7 +245,33 @@ describe('joinRoom', () => {
     await assert.rejects(joinRoom({ code: 'ABC', displayName: 'Sam' }), /No room with that code/);
     assert.equal(sockets.length, 0);
     assert.equal(contexts.length, 0);
-    assert.equal(getSession(), undefined);
+    assert.equal(getRoom(), undefined);
   });
 
+  it('leaves the room it was in when it enters another', async () => {
+    // Otherwise the first socket stays open and the server keeps a peer in
+    // a room whose tab has moved on.
+    const state = (code: string) => ({
+      type: 'room-state',
+      code,
+      roomName: 'Kitchen',
+      locked: false,
+      peers: [{ peerId: OTHER, displayName: 'Sam', isCreator: false, ready: false }],
+    });
+    const first = joinRoom({ code: 'ABC234', displayName: 'Sam' });
+    await flush();
+    sockets[0]!.deliver({ type: 'room-joined', code: 'ABC234', peerId: OTHER });
+    sockets[0]!.deliver(state('ABC234'));
+    await first;
+
+    const second = joinRoom({ code: 'DEF567', displayName: 'Sam' });
+    await flush();
+    sockets[1]!.deliver({ type: 'room-joined', code: 'DEF567', peerId: OTHER });
+    sockets[1]!.deliver(state('DEF567'));
+    await second;
+
+    assert.equal(sockets[0]!.readyState, 3, 'the first socket was hung up');
+    assert.equal(contexts[0]!.closed, true, 'and its audio let go');
+    assert.equal(getRoom()?.snapshot().code, 'DEF567');
+  });
 });

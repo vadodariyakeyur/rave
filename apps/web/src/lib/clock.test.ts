@@ -1,89 +1,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  asPing,
-  asPong,
-  ClockProbe,
-  estimate,
-  sampleOf,
-  serveClock,
-  type Clock,
-  type ClockPong,
-  type Sample,
-} from './clock.ts';
-
-/**
- * A fake channel pair. Neither end is a real DataChannel, but the only thing
- * clock.ts asks of one is send/addEventListener/readyState, and the whole
- * point of these tests is the arithmetic over the top.
- */
-interface FakeChannel {
-  readyState: string;
-  sent: string[];
-  peer?: FakeChannel;
-  send(data: string): void;
-  deliver(data: string): void;
-  addEventListener(type: string, fn: (e: MessageEvent) => void): void;
-  removeEventListener(type: string, fn: (e: MessageEvent) => void): void;
-}
-
-/**
- * A fake channel pair. Neither end is a real DataChannel, but the only thing
- * clock.ts asks of one is send/addEventListener/readyState, and the whole
- * point of these tests is the arithmetic over the top.
- */
-function channel(): FakeChannel {
-  const listeners = new Set<(e: MessageEvent) => void>();
-  const self: FakeChannel = {
-    readyState: 'open',
-    sent: [],
-    peer: undefined,
-    send(data) {
-      if (self.readyState !== 'open') throw new Error('closed');
-      self.sent.push(data);
-      self.peer?.deliver(data);
-    },
-    deliver(data) {
-      for (const l of [...listeners]) l({ data } as MessageEvent);
-    },
-    addEventListener(_t, fn) {
-      listeners.add(fn);
-    },
-    removeEventListener(_t, fn) {
-      listeners.delete(fn);
-    },
-  };
-  return self;
-}
-
-/**
- * A clock the test drives. Sleepers are kept in a queue and released by
- * advancing past their deadline, so a round that loses every probe to a 2s
- * timeout costs nothing in wall time.
- */
-function virtualClock(start = 0) {
-  let t = start;
-  let seq = 0;
-  const waiting = new Map<number, { at: number; resolve: () => void }>();
-  const clock: Clock & { advance: (ms: number) => void; time: () => number } = {
-    now: () => t,
-    sleep: (ms, resolve) => {
-      const id = seq++;
-      waiting.set(id, { at: t + ms, resolve });
-      return () => waiting.delete(id);
-    },
-    time: () => t,
-    advance: (ms) => {
-      t += ms;
-      for (const [id, w] of [...waiting]) {
-        if (w.at > t) continue;
-        waiting.delete(id);
-        w.resolve();
-      }
-    },
-  };
-  return clock;
-}
+import { ClockProbe, estimate, sampleOf, serveClock, type Sample } from './clock.ts';
+import { link, linked, step, virtualClock, type FakeChannel } from './testing.ts';
+import type { ClockPong } from './wire.ts';
 
 describe('sampleOf', () => {
   it('recovers a known offset from a symmetric link', () => {
@@ -161,40 +80,15 @@ describe('estimate', () => {
   });
 });
 
-describe('message narrowing', () => {
-  it('ignores a file chunk on the shared channel', () => {
-    // #5 sends binary down this same wire. Neither side may claim it.
-    assert.equal(asPing(new ArrayBuffer(8)), undefined);
-    assert.equal(asPong(new ArrayBuffer(8)), undefined);
-  });
-
-  it("ignores #5's file header", () => {
-    const header = JSON.stringify({ type: 'file-header', fileName: 'a.mp3', byteLength: 10 });
-    assert.equal(asPing(header), undefined);
-    assert.equal(asPong(header), undefined);
-  });
-
-  it('ignores malformed JSON and a ping missing its fields', () => {
-    assert.equal(asPing('not json'), undefined);
-    assert.equal(asPing(JSON.stringify({ type: 'clock-ping' })), undefined);
-    assert.equal(asPong(JSON.stringify({ type: 'clock-pong', id: 1 })), undefined);
-  });
-
-  it('accepts a well-formed pair', () => {
-    assert.ok(asPing(JSON.stringify({ type: 'clock-ping', id: 1, t0: 0 })));
-    assert.ok(asPong(JSON.stringify({ type: 'clock-pong', id: 1, t0: 0, t1: 1, t2: 2 })));
-  });
-});
-
 describe('serveClock', () => {
   it('echoes the id and t0, and reports its own hold time', () => {
-    const c = channel();
+    const c = link();
     let clock = 500;
-    const stop = serveClock(c as never, () => (clock += 2));
-    c.deliver(JSON.stringify({ type: 'clock-ping', id: 7, t0: 123 }));
+    const stop = serveClock(c.link, () => (clock += 2));
+    c.channel.deliver(JSON.stringify({ type: 'clock-ping', id: 7, t0: 123 }));
 
-    assert.equal(c.sent.length, 1);
-    const pong = JSON.parse(c.sent[0]!) as ClockPong;
+    assert.equal(c.channel.sent.length, 1);
+    const pong = c.channel.messages()[0] as unknown as ClockPong;
     assert.equal(pong.type, 'clock-pong');
     assert.equal(pong.id, 7);
     assert.equal(pong.t0, 123, 'the peer must be able to match its own probe');
@@ -203,18 +97,28 @@ describe('serveClock', () => {
   });
 
   it('stays quiet for anything that is not a ping', () => {
-    const c = channel();
-    serveClock(c as never, () => 0);
-    c.deliver(JSON.stringify({ type: 'file-header', fileName: 'a', byteLength: 1 }));
-    c.deliver('garbage');
-    assert.equal(c.sent.length, 0);
+    const c = link();
+    serveClock(c.link, () => 0);
+    c.channel.deliver(JSON.stringify({ type: 'file-header', fileName: 'a', byteLength: 1 }));
+    c.channel.deliver('garbage');
+    assert.equal(c.channel.sent.length, 0);
+  });
+
+  it('stops answering once stopped', () => {
+    const c = link();
+    const stop = serveClock(c.link, () => 0);
+    stop();
+    c.channel.deliver(JSON.stringify({ type: 'clock-ping', id: 1, t0: 0 }));
+    assert.equal(c.channel.sent.length, 0);
   });
 
   it('does not throw when the channel died mid-reply', () => {
-    const c = channel();
-    serveClock(c as never, () => 0);
-    c.readyState = 'closed';
-    assert.doesNotThrow(() => c.deliver(JSON.stringify({ type: 'clock-ping', id: 1, t0: 0 })));
+    const c = link();
+    serveClock(c.link, () => 0);
+    c.channel.readyState = 'closed';
+    assert.doesNotThrow(() =>
+      c.channel.deliver(JSON.stringify({ type: 'clock-ping', id: 1, t0: 0 })),
+    );
   });
 });
 
@@ -224,10 +128,7 @@ describe('ClockProbe', () => {
    * one-way delay, stepping the virtual clock until a round completes.
    */
   function run({ offset, oneWay }: { offset: number; oneWay: number }) {
-    const peer = channel();
-    const host = channel();
-    peer.peer = host;
-    host.peer = peer;
+    const { a: peer, b: host } = linked();
 
     const clock = virtualClock();
     // The creator reads the same tick counter, shifted. Rediscovering that
@@ -237,32 +138,21 @@ describe('ClockProbe', () => {
     // Charge the one-way delay on each hop by advancing before delivery.
     const hop = (target: FakeChannel) => {
       const original = target.deliver.bind(target);
-      target.deliver = (data: string) => {
+      target.deliver = (data: unknown) => {
         clock.advance(oneWay);
         original(data);
       };
     };
-    hop(peer);
-    hop(host);
+    hop(peer.channel);
+    hop(host.channel);
 
     return { peer, host, clock, hostNow };
   }
 
-  /** Step time in small slices so each queued sleeper fires in order. */
-  const step = async (clock: ReturnType<typeof virtualClock>, ms: number) => {
-    for (let i = 0; i < ms; i += 10) {
-      clock.advance(10);
-      // Let the promise chain inside #loop actually progress between steps.
-      await Promise.resolve();
-      await Promise.resolve();
-      await new Promise((r) => setImmediate(r));
-    }
-  };
-
   it('measures the offset over a link with a known delay', async () => {
     const { peer, host, clock, hostNow } = run({ offset: 250, oneWay: 5 });
-    const stopServing = serveClock(host as never, hostNow);
-    const probe = new ClockProbe(peer as never, clock);
+    const stopServing = serveClock(host.link, hostNow);
+    const probe = new ClockProbe(peer.link, clock);
     probe.start();
     // One round: 20 probes, 50ms apart.
     await step(clock, 1_500);
@@ -278,14 +168,14 @@ describe('ClockProbe', () => {
   it('ignores a pong for a probe that already timed out', async () => {
     // Its round has been scored. Folding it in now would mix two rounds.
     const { peer, host, clock, hostNow } = run({ offset: 100, oneWay: 1 });
-    const stopServing = serveClock(host as never, hostNow);
-    const probe = new ClockProbe(peer as never, clock);
+    const stopServing = serveClock(host.link, hostNow);
+    const probe = new ClockProbe(peer.link, clock);
     probe.start();
     await step(clock, 1_500);
 
     const before = probe.estimate();
     // id 9999 was never issued.
-    peer.deliver(JSON.stringify({ type: 'clock-pong', id: 9999, t0: 0, t1: 5, t2: 6 }));
+    peer.channel.deliver(JSON.stringify({ type: 'clock-pong', id: 9999, t0: 0, t1: 5, t2: 6 }));
     assert.deepEqual(probe.estimate(), before);
     probe.close();
     stopServing();
@@ -295,8 +185,8 @@ describe('ClockProbe', () => {
     // A stale offset beats no offset. Zero samples is how the overlay knows
     // to say so, instead of showing the old number as if it were fresh.
     const { peer, host, clock, hostNow } = run({ offset: 100, oneWay: 1 });
-    const stopServing = serveClock(host as never, hostNow);
-    const probe = new ClockProbe(peer as never, clock);
+    const stopServing = serveClock(host.link, hostNow);
+    const probe = new ClockProbe(peer.link, clock);
     probe.start();
     await step(clock, 1_500);
 
@@ -305,7 +195,7 @@ describe('ClockProbe', () => {
 
     // The creator goes dark. Every probe from here times out.
     stopServing();
-    peer.readyState = 'closed';
+    peer.channel.readyState = 'closed';
     await step(clock, 10_000);
 
     assert.equal(probe.estimate().offsetMs, good.offsetMs, 'the last good offset stands');
@@ -314,21 +204,42 @@ describe('ClockProbe', () => {
   });
 
   it('reports nothing before the first round lands', () => {
-    const probe = new ClockProbe(channel() as never, virtualClock());
+    const probe = new ClockProbe(link().link, virtualClock());
     assert.equal(probe.estimate().offsetMs, undefined);
+    probe.close();
+  });
+
+  it('waits for the link to open instead of spending a round on a dead one', async () => {
+    // Probing a channel that is not open yet burns the first round and then
+    // sleeps out the interval — and the first offset is the one a start cue
+    // is waiting for.
+    const peer = link('connecting');
+    const host = link();
+    peer.channel.peer = host.channel;
+    host.channel.peer = peer.channel;
+    const clock = virtualClock();
+    serveClock(host.link, () => clock.now() + 40);
+    const probe = new ClockProbe(peer.link, clock);
+    probe.start();
+    await step(clock, 3_000);
+    assert.equal(peer.channel.sent.length, 0, 'nothing sent into a channel that is not open');
+
+    peer.channel.open();
+    await step(clock, 1_500);
+    assert.equal(probe.estimate().offsetMs, 40, 'and a full round straight after it opens');
     probe.close();
   });
 
   it('stops probing once closed', async () => {
     const { peer, host, clock, hostNow } = run({ offset: 0, oneWay: 1 });
-    serveClock(host as never, hostNow);
-    const probe = new ClockProbe(peer as never, clock);
+    serveClock(host.link, hostNow);
+    const probe = new ClockProbe(peer.link, clock);
     probe.start();
     await step(clock, 300);
     probe.close();
 
-    const sentSoFar = peer.sent.length;
+    const sentSoFar = peer.channel.sent.length;
     await step(clock, 5_000);
-    assert.equal(peer.sent.length, sentSoFar, 'a closed probe must not keep pinging');
+    assert.equal(peer.channel.sent.length, sentSoFar, 'a closed probe must not keep pinging');
   });
 });

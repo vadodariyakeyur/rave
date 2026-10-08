@@ -1,10 +1,13 @@
 'use client';
 
+import type { PeerLink } from './link';
+import type { ClockPing, ClockPong } from './wire';
+
 /**
  * How far this device's clock sits from the creator's, measured rather than
  * assumed.
  *
- * NTP's algorithm over the DataChannel the mesh already opened. Nothing here
+ * NTP's algorithm over the link the mesh already opened. Nothing here
  * touches the server, and nothing here reads Date.now(): a wall clock is not
  * monotonic (an NTP correction moves it backward mid-track, shifting a
  * scheduled start underneath you) and is unrelated to the audio hardware
@@ -38,25 +41,6 @@ const PROBE_TIMEOUT_MS = 2_000;
  * are the ones that spent the least time being lied to.
  */
 const KEEP_FRACTION = 0.25;
-
-/** Probe, peer -> creator. `id` comes back untouched so the reply can be matched. */
-export interface ClockPing {
-  type: 'clock-ping';
-  id: number;
-  /** The sender's own monotonic clock. Meaningless to the receiver, echoed back. */
-  t0: number;
-}
-
-/** Reply, creator -> peer. t1 and t2 are both the creator's clock. */
-export interface ClockPong {
-  type: 'clock-pong';
-  id: number;
-  t0: number;
-  /** When the creator saw the ping. */
-  t1: number;
-  /** When the creator sent this reply. Not equal to t1: serialising takes time. */
-  t2: number;
-}
 
 export interface Sample {
   rtt: number;
@@ -119,62 +103,19 @@ export function sampleOf(pong: ClockPong, t3: number): Sample {
   };
 }
 
-/** Narrow an arbitrary channel message to a ping. Shared wire: #5 is on it too. */
-export function asPing(data: unknown): ClockPing | undefined {
-  const value = parse(data);
-  if (!value || value.type !== 'clock-ping') return undefined;
-  return typeof value.id === 'number' && typeof value.t0 === 'number'
-    ? (value as unknown as ClockPing)
-    : undefined;
-}
-
-/** Narrow an arbitrary channel message to a pong. */
-export function asPong(data: unknown): ClockPong | undefined {
-  const value = parse(data);
-  if (!value || value.type !== 'clock-pong') return undefined;
-  return ['id', 't0', 't1', 't2'].every((k) => typeof value[k] === 'number')
-    ? (value as unknown as ClockPong)
-    : undefined;
-}
-
-function parse(data: unknown): Record<string, unknown> | undefined {
-  if (typeof data !== 'string') return undefined; // A file chunk. Not ours.
-  try {
-    const value: unknown = JSON.parse(data);
-    return typeof value === 'object' && value !== null
-      ? (value as Record<string, unknown>)
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 /**
- * Answer clock pings on a channel. The creator's whole side of this.
+ * Answer one peer's clock pings. The creator's whole side of this.
  *
- * t1 is taken before anything else happens and t2 immediately before the
- * send, so the reply carries how long we actually held it rather than
- * pretending that was free.
+ * t1 is taken on entry and t2 immediately before the send, so the reply
+ * carries how long we actually held it rather than pretending that was free.
  */
-export function serveClock(
-  channel: RTCDataChannel,
-  now: () => number = () => performance.now(),
-): () => void {
-  const onMessage = (event: MessageEvent) => {
+export function serveClock(link: PeerLink, now: () => number = () => performance.now()): () => void {
+  return link.on('clock-ping', (ping) => {
     const t1 = now();
-    const ping = asPing(event.data);
-    if (!ping) return;
-    const pong: ClockPong = { type: 'clock-pong', id: ping.id, t0: ping.t0, t1, t2: now() };
-    // A channel that closed between the ping and here throws on send, and a
-    // clock reply is not worth taking anything else down for.
-    try {
-      channel.send(JSON.stringify(pong));
-    } catch {
-      // The peer is gone. Their next round, if any, opens a new channel.
-    }
-  };
-  channel.addEventListener('message', onMessage);
-  return () => channel.removeEventListener('message', onMessage);
+    // A link that dropped between the ping and here just does not send, and
+    // a clock reply is not worth taking anything else down for.
+    link.send({ type: 'clock-pong', id: ping.id, t0: ping.t0, t1, t2: now() });
+  });
 }
 
 /**
@@ -207,7 +148,7 @@ const realClock: Clock = {
  * says the reading is stale instead of showing it as fresh.
  */
 export class ClockProbe {
-  readonly #channel: RTCDataChannel;
+  readonly #link: PeerLink;
   readonly #clock: Clock;
   readonly #listeners = new Set<() => void>();
   readonly #pending = new Map<number, (pong: ClockPong) => void>();
@@ -220,8 +161,8 @@ export class ClockProbe {
   /** The same, for the timeout on the probe currently in flight. */
   #cancelProbe: (() => void) | undefined;
 
-  constructor(channel: RTCDataChannel, clock: Clock = realClock) {
-    this.#channel = channel;
+  constructor(link: PeerLink, clock: Clock = realClock) {
+    this.#link = link;
     this.#clock = clock;
   }
 
@@ -234,19 +175,24 @@ export class ClockProbe {
     return () => this.#listeners.delete(listener);
   }
 
+  /**
+   * Begin measuring, as soon as there is someone to measure against.
+   *
+   * The creator's link is usually not open yet. Probing it anyway would
+   * spend the first round on sends that go nowhere and then sleep out the
+   * interval, so the first real offset would land seconds late — and the
+   * first offset is the one the start cue is waiting for.
+   */
   start(): void {
     if (this.#detach || this.#closed) return;
-    const onMessage = (event: MessageEvent) => {
-      const t3 = this.#clock.now();
-      const pong = asPong(event.data);
-      if (!pong) return;
-      // Unknown id: a reply to a probe that already timed out. Its round has
-      // been scored, so folding it in now would mix two rounds.
-      this.#pending.get(pong.id)?.(pong);
-    };
-    this.#channel.addEventListener('message', onMessage);
-    this.#detach = () => this.#channel.removeEventListener('message', onMessage);
-    void this.#loop();
+    // Unknown id: a reply to a probe that already timed out. Its round has
+    // been scored, so folding it in now would mix two rounds.
+    this.#detach = this.#link.on('clock-pong', (pong) => this.#pending.get(pong.id)?.(pong));
+    void this.#link.opened().then(
+      () => this.#loop(),
+      // The creator went before the link ever opened. Nothing to measure.
+      () => {},
+    );
   }
 
   close(): void {
@@ -288,7 +234,6 @@ export class ClockProbe {
   }
 
   #probe(): Promise<Sample | undefined> {
-    if (this.#channel.readyState !== 'open') return Promise.resolve(undefined);
     const id = this.#nextId++;
 
     return new Promise<Sample | undefined>((resolve) => {
@@ -304,12 +249,8 @@ export class ClockProbe {
       this.#pending.set(id, (pong) => settle(sampleOf(pong, this.#clock.now())));
 
       const ping: ClockPing = { type: 'clock-ping', id, t0: this.#clock.now() };
-      try {
-        this.#channel.send(JSON.stringify(ping));
-      } catch {
-        // Channel died under us. One lost sample, not a lost round.
-        settle(undefined);
-      }
+      // Link down under us. One lost sample, not a lost round.
+      if (!this.#link.send(ping)) settle(undefined);
     });
   }
 

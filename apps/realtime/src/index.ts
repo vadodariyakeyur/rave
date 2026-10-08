@@ -1,8 +1,23 @@
 import { createServer } from 'node:http';
 import { WebSocketServer } from 'ws';
-import { handleConnection, metrics } from './server.ts';
+import { RoomHub } from './hub.ts';
+import { Metrics } from './metrics.ts';
+import { RoomRegistry } from './rooms.ts';
+import { connectionHandler, log } from './server.ts';
 
 const PORT = Number(process.env['PORT'] ?? 8080);
+
+const rooms = new RoomRegistry();
+
+/**
+ * The live gauges read off the registry at scrape time rather than being
+ * counted at each join and leave. A counter pair would be a second copy of
+ * the roster, and the two would drift the first time a code path forgot to
+ * decrement.
+ */
+const metrics = new Metrics(rooms);
+
+const hub = new RoomHub({ rooms, metrics, log });
 
 const server = createServer((req, res) => {
   if (req.url === '/metrics') {
@@ -34,7 +49,7 @@ const server = createServer((req, res) => {
 
 const wss = new WebSocketServer({ server, path: '/ws' });
 
-wss.on('connection', handleConnection);
+wss.on('connection', connectionHandler(hub));
 
 wss.on('error', (err) => {
   console.error(

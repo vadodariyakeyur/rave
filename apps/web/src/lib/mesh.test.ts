@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import type { Peer, ServerMessage } from '@rave/protocol';
 import { Mesh } from './mesh.ts';
 import type { Signaling } from './signaling.ts';
+import { FakeChannel } from './testing.ts';
 
 /**
  * The mesh's own rules, not the browser's: who offers, what happens to a
@@ -17,27 +18,11 @@ const C = '33333333-3333-4333-8333-333333333333';
 
 const pcs: FakePeerConnection[] = [];
 
-class FakeDataChannel {
-  closed = false;
-  readyState: RTCDataChannelState = 'connecting';
-  readonly #listeners = new Map<string, (() => void)[]>();
-  addEventListener(type: string, fn: () => void): void {
-    this.#listeners.set(type, [...(this.#listeners.get(type) ?? []), fn]);
-  }
-  open(): void {
-    this.readyState = 'open';
-    for (const fn of this.#listeners.get('open') ?? []) fn();
-  }
-  close(): void {
-    this.closed = true;
-  }
-}
-
 class FakePeerConnection {
   connectionState: RTCPeerConnectionState = 'new';
   remoteDescription: unknown = null;
   localDescription = { type: 'offer', toJSON: () => ({ type: 'offer', sdp: 'local' }) };
-  readonly channels: FakeDataChannel[] = [];
+  readonly channels: FakeChannel[] = [];
   readonly addedCandidates: unknown[] = [];
   closedCount = 0;
   readonly #listeners = new Map<string, ((ev: unknown) => void)[]>();
@@ -52,8 +37,8 @@ class FakePeerConnection {
     for (const fn of this.#listeners.get(type) ?? []) fn(ev);
   }
   readonly channelOptions: (RTCDataChannelInit | undefined)[] = [];
-  createDataChannel(_label: string, options?: RTCDataChannelInit): FakeDataChannel {
-    const channel = new FakeDataChannel();
+  createDataChannel(_label: string, options?: RTCDataChannelInit): FakeChannel {
+    const channel = new FakeChannel('connecting');
     this.channels.push(channel);
     this.channelOptions.push(options);
     // The real one fires negotiationneeded asynchronously; the mesh relies
@@ -247,7 +232,7 @@ describe('Mesh', () => {
 
     mesh.sync([peer(A)]);
     assert.equal(pc.closedCount, 1);
-    assert.equal(pc.channels[0]?.closed, true);
+    assert.equal(pc.channels[0]?.readyState, 'closed');
     // A 'closed' row is a row for someone who is not in the room.
     assert.equal(mesh.states().has(B), false);
   });
@@ -289,30 +274,49 @@ describe('Mesh', () => {
     assert.deepEqual(pcs[0]!.channelOptions, [{ ordered: true }]);
   });
 
-  it('hands out the channel to a connected peer, and nothing before it opens', async () => {
-    // #5 sends the file down these. A half-open channel handed out early is
-    // a send that throws in the middle of a transfer.
+  it('hands out a link that starts working when the channel opens', async () => {
+    // Asked for before there is anything to send down: a half-open channel
+    // used early is a send that throws in the middle of a transfer.
     const { mesh } = meshFor(A);
+    const link = mesh.link(B);
     mesh.sync([peer(A), peer(B)]);
     await settle();
-    assert.equal(mesh.channel(B), undefined, 'not while the channel is still connecting');
+    const cue = { type: 'pause', pauseAt: 1 } as const;
+    assert.equal(link.send(cue), false, 'not while the channel is still connecting');
 
+    let opened = false;
+    void link.opened().then(() => (opened = true));
     pcs[0]!.channels[0]!.open();
-    assert.equal(mesh.channel(B), pcs[0]!.channels[0] as unknown as RTCDataChannel);
-    assert.equal(mesh.channel(C), undefined, 'a peer with no connection has no channel');
+    await settle();
+
+    assert.equal(opened, true);
+    assert.equal(link.send(cue), true);
+    assert.equal(mesh.link(B), link, 'the same link for as long as the peer is here');
   });
 
-  it('notifies when a channel opens, so a waiting transfer can start', async () => {
-    // The channel opens after connectionstatechange has already fired. With
-    // no notify, a sender subscribed to the mesh never learns it may send.
+  it('links the answering side through the channel the offerer opened', async () => {
+    const { mesh, signaling } = meshFor(B);
+    const heard: unknown[] = [];
+    mesh.link(A).on('pause', (cue) => heard.push(cue));
+    signaling.deliver(A, { description: { type: 'offer', sdp: 'x' } });
+    await settle();
+
+    const channel = new FakeChannel();
+    pcs[0]!.emit('datachannel', { channel });
+    channel.deliver(JSON.stringify({ type: 'pause', pauseAt: 9 }));
+
+    assert.deepEqual(heard, [{ type: 'pause', pauseAt: 9 }]);
+  });
+
+  it('closes the link of a peer who leaves, so nothing waits on them forever', async () => {
     const { mesh } = meshFor(A);
     mesh.sync([peer(A), peer(B)]);
     await settle();
+    const waiting = mesh.link(B).opened();
 
-    let notified = 0;
-    mesh.subscribe(() => notified++);
-    pcs[0]!.channels[0]!.open();
-    assert.equal(notified, 1);
+    mesh.sync([peer(A)]);
+
+    await assert.rejects(waiting);
   });
 
   it('reports a negotiation that throws as failed', async () => {

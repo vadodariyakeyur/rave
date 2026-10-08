@@ -1,5 +1,7 @@
 'use client';
 
+import type { Cue, PlayCue } from './wire';
+
 /**
  * Starting the same audio on every device at the same instant.
  *
@@ -9,7 +11,7 @@
  * wire at playback is a number saying when.
  *
  * That number is on the creator's `performance.now()` clock, and it travels
- * the DataChannel — the same wire the offset correcting it was measured on.
+ * the peer link — the same wire the offset correcting it was measured on.
  * Sending it via the server would put the timing on a different path than
  * its own correction, and the server on the critical path of the one thing
  * this product does.
@@ -73,46 +75,6 @@ export const DRIFT_RESEEK_MS = 100;
  */
 export const NUDGE_RATE = 0.002;
 
-/** Creator -> peers. Play this buffer from `fromSeconds` at `startAt`. */
-export interface PlayCue {
-  type: 'play';
-  /** The creator's monotonic clock. Meaningless here until offset-corrected. */
-  startAt: number;
-  /** Where in the track to start. Non-zero when resuming from a pause. */
-  fromSeconds: number;
-}
-
-/** Creator -> peers. Stop at this instant, everyone on the same sample. */
-export interface PauseCue {
-  type: 'pause';
-  /** The creator's monotonic clock. */
-  pauseAt: number;
-}
-
-export type Cue = PlayCue | PauseCue;
-
-/** Narrow a channel message to a cue. Shared wire: #5 and #6 are on it too. */
-export function asCue(data: unknown): Cue | undefined {
-  if (typeof data !== 'string') return undefined; // A file chunk. Not ours.
-  let value: unknown;
-  try {
-    value = JSON.parse(data);
-  } catch {
-    return undefined;
-  }
-  if (typeof value !== 'object' || value === null) return undefined;
-  const cue = value as Record<string, unknown>;
-  if (cue.type === 'play') {
-    return typeof cue.startAt === 'number' && typeof cue.fromSeconds === 'number'
-      ? (cue as unknown as PlayCue)
-      : undefined;
-  }
-  if (cue.type === 'pause') {
-    return typeof cue.pauseAt === 'number' ? (cue as unknown as PauseCue) : undefined;
-  }
-  return undefined;
-}
-
 /**
  * The audio surface the player needs, and nothing more.
  *
@@ -129,6 +91,14 @@ export interface AudioSink {
 /** Reading the monotonic clock. Same seam as clock.ts, same reason. */
 export type Now = () => number;
 
+/** Calling back on a cadence. Returns a canceller. setInterval, as a seam. */
+export type Every = (ms: number, fn: () => void) => () => void;
+
+const realEvery: Every = (ms, fn) => {
+  const timer = setInterval(fn, ms);
+  return () => clearInterval(timer);
+};
+
 export interface PlayerState {
   playing: boolean;
   /**
@@ -141,6 +111,13 @@ export interface PlayerState {
 /**
  * One device's playback, driven by cues on the shared clock.
  *
+ * It exists from the moment audio is armed, before there is a track to play
+ * or an offset to play it by, and takes each when it arrives. A cue heard
+ * before both are in hand is held, not dropped: the creator's cue is one
+ * fire-and-forget send with no replay, and dropping it is silence for the
+ * rest of the track. So the caller's whole job is to pass things on as they
+ * happen — in any order.
+ *
  * The creator drives its own instance with the same cue it sends to
  * everyone, so there is no separate creator path to get subtly wrong: the
  * creator is simply the peer whose offset is zero.
@@ -148,8 +125,10 @@ export interface PlayerState {
 export class Player {
   readonly #sink: AudioSink;
   readonly #now: Now;
-  readonly #buffer: AudioBuffer;
+  readonly #every: Every;
   readonly #listeners = new Set<() => void>();
+  /** Absent for a joiner until the transfer lands. */
+  #buffer: AudioBuffer | undefined;
   #source: AudioBufferSourceNode | undefined;
   /** Where the track was when it last stopped. Resumes pick up here. */
   #pausedAt = 0;
@@ -159,22 +138,34 @@ export class Player {
    */
   #originAudioTime: number | undefined;
   /**
-   * The live cue in our own terms: the monotonic instant the track was to be
-   * at `fromSeconds`, already corrected for both offsets.
+   * The play cue in force, still on the creator's clock.
    *
    * Kept because drift needs an expectation to compare against, and this is
-   * it — where the shared clock says we should be. Deriving that from the
-   * audio clock instead would be comparing the audio clock to itself.
+   * it — where the shared clock says we should be. Kept uncorrected because
+   * the correction is not a constant: the offset is re-measured for as long
+   * as the room is open, and a track that only ever saw the value from the
+   * moment it started is wrong by the end of a long one.
    */
-  #cue: { localStartMs: number; fromSeconds: number } | undefined;
+  #playing: PlayCue | undefined;
+  /** The last cue heard that could not be acted on yet. */
+  #held: Cue | undefined;
+  /**
+   * What clock.ts measured: add it to our clock to get the creator's.
+   * Undefined until a first round lands — and until then a cue cannot be
+   * placed at all, since the two clocks share no origin.
+   */
+  #clockOffsetMs: number | undefined;
   /** The listener's own nudge, in ms. Negative plays earlier. */
   #userOffsetMs = 0;
+  /** Cancels the drift check, which runs only while there is a source. */
+  #stopCorrecting: (() => void) | undefined;
   #closed = false;
 
-  constructor(input: { sink: AudioSink; buffer: AudioBuffer; now?: Now }) {
+  constructor(input: { sink: AudioSink; buffer?: AudioBuffer; now?: Now; every?: Every }) {
     this.#sink = input.sink;
     this.#buffer = input.buffer;
     this.#now = input.now ?? (() => performance.now());
+    this.#every = input.every ?? realEvery;
   }
 
   subscribe(listener: () => void): () => void {
@@ -196,41 +187,57 @@ export class Player {
   position(): number {
     if (this.#originAudioTime === undefined) return this.#pausedAt;
     const elapsed = this.#sink.currentTime - this.#originAudioTime;
-    return Math.min(Math.max(elapsed, this.#pausedAt), this.#buffer.duration);
+    return Math.min(Math.max(elapsed, this.#pausedAt), this.#buffer?.duration ?? 0);
+  }
+
+  /** The decoded track has landed. A cue that was waiting on it plays now. */
+  load(buffer: AudioBuffer): void {
+    if (this.#closed || this.#buffer) return;
+    this.#buffer = buffer;
+    this.#release();
   }
 
   /**
-   * Act on a cue, correcting the creator's clock to ours.
+   * Act on a cue from the creator — now, or as soon as it can be.
    *
-   * `offsetMs` is what clock.ts measured: add it to our clock to get the
-   * creator's, so subtract it to bring the creator's instant back to ours.
-   * It is zero for the creator itself, which is why there is one path here
-   * and not two.
-   *
-   * `userOffsetMs` is the listener's own nudge, for output the browser
-   * cannot see the lag of — Bluetooth is 100-300ms late and says nothing.
-   * It defaults to the last value set, so a cue arriving mid-track keeps
-   * the listener's calibration rather than silently discarding it.
+   * `#play` already starts a cue whose instant has passed from where the
+   * track would be by now, so a cue that had to wait joins mid-track in sync
+   * rather than from the top, alone.
    */
-  apply(cue: Cue, offsetMs: number, userOffsetMs = this.#userOffsetMs): void {
+  cue(cue: Cue): void {
     if (this.#closed) return;
-    this.#userOffsetMs = userOffsetMs;
-    if (cue.type === 'pause') return this.#pause(cue.pauseAt - offsetMs + userOffsetMs);
-    this.#play(cue.startAt - offsetMs + userOffsetMs, cue.fromSeconds);
+    // Only the latest matters: a play superseded by a pause before either
+    // could be acted on is a track that should not be playing.
+    this.#held = cue;
+    this.#release();
+  }
+
+  /**
+   * The measured offset to the creator's clock, each time it is measured.
+   *
+   * Zero for the creator itself, which is why there is one path here and
+   * not two. A new value does not jump a playing track: it moves where
+   * {@link drift} says the track should be, and the next correction closes
+   * the gap the usual way.
+   */
+  setClockOffset(offsetMs: number): void {
+    if (this.#closed) return;
+    this.#clockOffsetMs = offsetMs;
+    this.#release();
   }
 
   /**
    * How far this device has slipped from where the shared clock says it
    * should be, in ms. Positive means running ahead.
    *
-   * The expectation comes from the cue this device already holds, not from
-   * asking the creator: the divergence that matters is between this device's
-   * audio clock and its monotonic one, and that is measurable here, with no
-   * traffic and no dependence on the creator still answering.
+   * The expectation comes from the cue this device already holds and the
+   * offset it last measured, so reading it costs no traffic and does not
+   * depend on the creator answering right now.
    */
   drift(): number {
-    if (!this.#cue || this.#originAudioTime === undefined) return 0;
-    const expected = this.#cue.fromSeconds + (this.#now() - this.#cue.localStartMs) / 1000;
+    if (!this.#playing || this.#originAudioTime === undefined) return 0;
+    const sinceStartMs = this.#now() - this.#local(this.#playing.startAt);
+    const expected = this.#playing.fromSeconds + sinceStartMs / 1000;
     return (this.position() - expected) * 1000;
   }
 
@@ -240,9 +247,11 @@ export class Player {
    * Small drift is nudged out via playbackRate, which is inaudible and
    * leaves the audio running. Large drift is reseeked, because nudging a
    * gap that size would take minutes of audibly wrong pitch to close.
+   *
+   * Runs by itself every DRIFT_CHECK_MS while a track is playing.
    */
   correct(): void {
-    if (this.#closed || !this.#source || !this.#cue) return;
+    if (this.#closed || !this.#source || !this.#playing) return;
     const driftMs = this.drift();
 
     if (Math.abs(driftMs) > DRIFT_RESEEK_MS) {
@@ -250,7 +259,7 @@ export class Player {
       // and a fresh source runs at 1. The jump has already closed the gap,
       // so carrying the old rate over would re-open it in the other
       // direction.
-      return this.#play(this.#cue.localStartMs, this.#cue.fromSeconds);
+      return this.#play(this.#playing);
     }
     // Ahead means slow down. Below the floor the rate goes back to 1 rather
     // than staying nudged: the correction is finished, not merely small.
@@ -261,48 +270,71 @@ export class Player {
   /**
    * Set the listener's own nudge, and act on it now.
    *
-   * Reseeking mid-track rather than waiting for the next cue is the point:
-   * Bluetooth latency is not visible to the browser, so the only way to
-   * calibrate it is to drag until it sounds right — which requires hearing
-   * the change while dragging.
+   * For output the browser cannot see the lag of — Bluetooth is 100-300ms
+   * late and says nothing. Reseeking mid-track rather than waiting for the
+   * next cue is the point: the only way to calibrate it is to drag until it
+   * sounds right, which requires hearing the change while dragging.
    */
   setUserOffset(userOffsetMs: number): void {
     if (this.#closed || userOffsetMs === this.#userOffsetMs) return;
-    const delta = userOffsetMs - this.#userOffsetMs;
     this.#userOffsetMs = userOffsetMs;
-    // Only the live cue moves; a stopped track simply honours the new value
+    // Only a live track moves; a stopped one simply honours the new value
     // when its next cue arrives.
-    if (!this.#cue || !this.#source) return;
-    this.#play(this.#cue.localStartMs + delta, this.#cue.fromSeconds);
+    if (!this.#playing || !this.#source) return;
+    this.#play(this.#playing);
   }
 
   close(): void {
     this.#closed = true;
     this.#stopSource();
+    this.#idle();
+    this.#held = undefined;
     this.#listeners.clear();
   }
 
+  /** Act on the held cue, if there is now both a track and an offset. */
+  #release(): void {
+    const cue = this.#held;
+    if (!cue || !this.#buffer || this.#clockOffsetMs === undefined) return;
+    this.#held = undefined;
+    if (cue.type === 'pause') return this.#pause(this.#local(cue.pauseAt));
+    this.#play(cue);
+  }
+
   /**
-   * Schedule a start at a local monotonic instant.
+   * An instant on the creator's clock, as an instant on ours.
+   *
+   * Add the offset to our clock to get the creator's, so subtract it to
+   * bring the creator's instant back; then the listener's own nudge on top.
+   */
+  #local(creatorMs: number): number {
+    return creatorMs - (this.#clockOffsetMs ?? 0) + this.#userOffsetMs;
+  }
+
+  /**
+   * Schedule a start at the cue's instant.
    *
    * A cue whose instant has already passed still plays, from where the track
    * would be by now — a peer whose cue arrived late joins mid-track in sync
    * rather than starting from the beginning, alone.
    */
-  #play(localStartMs: number, fromSeconds: number): void {
+  #play(cue: PlayCue): void {
+    const buffer = this.#buffer;
+    if (!buffer) return;
     this.#stopSource();
+    const localStartMs = this.#local(cue.startAt);
     const lateBySeconds = Math.max(0, (this.#now() - localStartMs) / 1000);
-    const offsetIntoTrack = fromSeconds + lateBySeconds;
-    if (offsetIntoTrack >= this.#buffer.duration) {
+    const offsetIntoTrack = cue.fromSeconds + lateBySeconds;
+    if (offsetIntoTrack >= buffer.duration) {
       // The track would already be over. Nothing to start.
-      this.#pausedAt = this.#buffer.duration;
-      this.#cue = undefined;
+      this.#pausedAt = buffer.duration;
+      this.#idle();
       this.#notify();
       return;
     }
 
     const source = this.#sink.createBufferSource();
-    source.buffer = this.#buffer;
+    source.buffer = buffer;
     source.connect(this.#sink.destination);
 
     // The audio clock and the monotonic clock are different clocks; this is
@@ -315,15 +347,18 @@ export class Player {
     this.#pausedAt = offsetIntoTrack;
     this.#originAudioTime = when - offsetIntoTrack;
     // What drift measures itself against, and what a slider drag moves.
-    this.#cue = { localStartMs, fromSeconds };
+    this.#playing = cue;
+    // Slowly on purpose: drift accumulates over minutes, and correcting on
+    // a short cadence chases measurement jitter instead.
+    this.#stopCorrecting ??= this.#every(DRIFT_CHECK_MS, () => this.correct());
     source.onended = () => {
       // Only if this is still the live source: stopping one to start another
       // fires onended too, and that is not the track finishing.
       if (this.#source !== source) return;
       this.#source = undefined;
       this.#originAudioTime = undefined;
-      this.#cue = undefined;
-      this.#pausedAt = this.#buffer.duration;
+      this.#pausedAt = buffer.duration;
+      this.#idle();
       this.#notify();
     };
     this.#notify();
@@ -341,12 +376,12 @@ export class Player {
     const when = this.#sink.currentTime + Math.max(0, (localPauseMs - this.#now()) / 1000);
     // Where the track will be at that instant — recorded now, because after
     // the stop the audio clock can no longer tell us.
-    this.#pausedAt = Math.min(when - this.#originAudioTime, this.#buffer.duration);
+    this.#pausedAt = Math.min(when - this.#originAudioTime, this.#buffer?.duration ?? 0);
     source.onended = null;
     source.stop(when);
     this.#source = undefined;
     this.#originAudioTime = undefined;
-    this.#cue = undefined;
+    this.#idle();
     this.#notify();
   }
 
@@ -363,77 +398,14 @@ export class Player {
     this.#originAudioTime = undefined;
   }
 
+  /** Nothing is playing: no cue in force, and nothing to keep correcting. */
+  #idle(): void {
+    this.#playing = undefined;
+    this.#stopCorrecting?.();
+    this.#stopCorrecting = undefined;
+  }
+
   #notify(): void {
     for (const listener of [...this.#listeners]) listener();
   }
-}
-
-/**
- * The slice of the mesh the cues need: a channel per peer, and notice when
- * a new one opens. Same seam as Distributor, for the same reason — a real
- * RTCPeerConnection in a test is a test of WebRTC, not of this.
- */
-export interface CueTransport {
-  channel(peerId: string): RTCDataChannel | undefined;
-  subscribe(listener: () => void): () => void;
-}
-
-/**
- * Send a cue to every peer whose channel is open.
- *
- * Best-effort by design: a peer whose channel is not open has either left or
- * is about to, and the room does not wait. Returns how many heard it, which
- * is what the creator's own scheduling does not depend on but a log does.
- */
-export function broadcastCue(
-  transport: Pick<CueTransport, 'channel'>,
-  peerIds: readonly string[],
-  cue: Cue,
-): number {
-  const payload = JSON.stringify(cue);
-  let sent = 0;
-  for (const peerId of peerIds) {
-    const channel = transport.channel(peerId);
-    if (channel?.readyState !== 'open') continue;
-    try {
-      channel.send(payload);
-      sent++;
-    } catch {
-      // The channel died between the check and the send. Nothing to do: the
-      // mesh will report it, and the room carries on without them.
-    }
-  }
-  return sent;
-}
-
-/**
- * Listen for cues from the creator, reattaching when their channel opens.
- *
- * The channel does not exist yet when the room first renders — it arrives
- * with the mesh — so this subscribes and attaches on whichever notify brings
- * it, exactly as the clock probe does.
- */
-export function listenForCues(
-  transport: CueTransport,
-  creatorPeerId: string,
-  onCue: (cue: Cue) => void,
-): () => void {
-  let attached: RTCDataChannel | undefined;
-  const handle = (event: MessageEvent) => {
-    const cue = asCue(event.data);
-    if (cue) onCue(cue);
-  };
-  const attach = () => {
-    const channel = transport.channel(creatorPeerId);
-    if (!channel || channel === attached) return;
-    attached?.removeEventListener('message', handle);
-    channel.addEventListener('message', handle);
-    attached = channel;
-  };
-  attach();
-  const unsubscribe = transport.subscribe(attach);
-  return () => {
-    unsubscribe();
-    attached?.removeEventListener('message', handle);
-  };
 }

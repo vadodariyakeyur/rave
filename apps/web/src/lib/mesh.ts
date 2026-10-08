@@ -1,6 +1,7 @@
 'use client';
 
 import type { IceServer, Peer, ServerMessage } from '@rave/protocol';
+import { ChannelLink, type PeerLink } from './link';
 import type { Signaling } from './signaling';
 
 /**
@@ -8,7 +9,10 @@ import type { Signaling } from './signaling';
  *
  * The signaling server relays SDP and ICE by peer id and reads neither. Once
  * a connection is up, nothing else about it touches the server — which is the
- * whole point: the file and the clock go over these channels in #5 and #6.
+ * whole point: the file, the clock and the cues all go peer to peer.
+ *
+ * What comes out is a {@link PeerLink} per peer, not a channel: when the
+ * channel exists and whether it has opened yet stay in here.
  */
 
 /**
@@ -48,6 +52,7 @@ export class Mesh {
   readonly #selfPeerId: string;
   readonly #connections = new Map<string, Connection>();
   readonly #states = new Map<string, PeerConnectionState>();
+  readonly #links = new Map<string, ChannelLink>();
   readonly #listeners = new Set<() => void>();
   readonly #unsubscribe: () => void;
 
@@ -66,18 +71,19 @@ export class Mesh {
   }
 
   /**
-   * This peer's DataChannel, once it is actually usable.
+   * The link to a peer. Asked for at any time — before their connection
+   * exists, before its channel opens — and it starts working when it can.
    *
-   * Only when open: a channel exists from the moment it is created, and
-   * sending down one that is still connecting throws mid-transfer. The
-   * caller retries on the next notify rather than guarding this itself.
+   * The same link for as long as the peer is in the roster. When they leave
+   * it is closed for good; a rejoin is a new peer id and so a new link.
    */
-  channel(peerId: string): RTCDataChannel | undefined {
-    const channel = this.#connections.get(peerId)?.channel;
-    return channel?.readyState === 'open' ? channel : undefined;
+  link(peerId: string): PeerLink {
+    let link = this.#links.get(peerId);
+    if (!link) this.#links.set(peerId, (link = new ChannelLink()));
+    return link;
   }
 
-  /** For useSyncExternalStore. */
+  /** Told whenever a connection state changes. */
   subscribe(listener: () => void): () => void {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
@@ -112,6 +118,9 @@ export class Mesh {
   close(): void {
     this.#unsubscribe();
     for (const peerId of [...this.#connections.keys()]) this.#teardown(peerId);
+    // A link asked for but never connected is still someone waiting.
+    for (const link of this.#links.values()) link.close();
+    this.#links.clear();
   }
 
   #connect(peerId: string, initiator: boolean): Connection {
@@ -140,16 +149,16 @@ export class Mesh {
       pc.addEventListener('negotiationneeded', () =>
         this.#negotiate(peerId, () => this.#offer(peerId)),
       );
-      // Spelled out rather than left to the default: #5 sends the audio file
-      // over this and #6 the clock probes, and both break silently under
+      // Spelled out rather than left to the default: the audio file and the
+      // clock probes both go over this, and both break silently under
       // partial reliability. An explicit option is also something a test can
       // hold onto.
       connection.channel = pc.createDataChannel('rave', { ordered: true });
-      this.#watchChannel(connection.channel);
+      this.#linkFor(peerId).attach(connection.channel);
     } else {
       pc.addEventListener('datachannel', (event) => {
         connection.channel = event.channel;
-        this.#watchChannel(event.channel);
+        this.#linkFor(peerId).attach(event.channel);
       });
     }
 
@@ -213,13 +222,9 @@ export class Mesh {
     }
   }
 
-  /**
-   * A channel opens after connectionstatechange has already said 'connected',
-   * so nothing else announces the one moment a transfer may begin.
-   */
-  #watchChannel(channel: RTCDataChannel): void {
-    if (channel.readyState === 'open') return this.#notify();
-    channel.addEventListener('open', () => this.#notify());
+  #linkFor(peerId: string): ChannelLink {
+    this.link(peerId);
+    return this.#links.get(peerId)!;
   }
 
   #send(peerId: string, payload: SignalPayload): void {
@@ -233,6 +238,8 @@ export class Mesh {
     connection.channel?.close();
     connection.pc.close();
     this.#connections.delete(peerId);
+    this.#links.get(peerId)?.close();
+    this.#links.delete(peerId);
     // The peer is out of the roster entirely, so a 'closed' row would be a
     // row for someone who is not there. Drop it.
     this.#states.delete(peerId);

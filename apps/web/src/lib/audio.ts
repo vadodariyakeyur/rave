@@ -30,7 +30,10 @@ export async function armAudio(ctx: AudioContext): Promise<void> {
  * them so a peer arriving later can be served from any device, not only the
  * creator's.
  */
-export async function decodeBytes(ctx: AudioContext, bytes: ArrayBuffer): Promise<DecodedTrack> {
+export async function decodeBytes(
+  ctx: Pick<AudioContext, 'decodeAudioData'>,
+  bytes: ArrayBuffer,
+): Promise<DecodedTrack> {
   let buffer: AudioBuffer;
   try {
     buffer = await ctx.decodeAudioData(bytes.slice(0));
