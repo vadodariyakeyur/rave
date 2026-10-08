@@ -1,6 +1,10 @@
 import type { Metadata, Viewport } from 'next';
+import { Bricolage_Grotesque } from 'next/font/google';
 import { Toaster } from 'sonner';
 import './globals.css';
+
+// The font theme.css names in --font-sans. Change both together.
+const font = Bricolage_Grotesque({ subsets: ['latin'], variable: '--font-loaded' });
 
 export const metadata: Metadata = {
   title: 'rave',
@@ -8,7 +12,8 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: '#000000',
+  // theme.css's dark --background. A meta tag cannot read a CSS variable.
+  themeColor: '#0f1424',
   width: 'device-width',
   initialScale: 1,
 };
@@ -18,11 +23,23 @@ export default function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   // `dark` is hard-set: this app has no light mode and no theme toggle.
   return (
-    <html lang="en" className="dark">
+    <html lang="en" className={`dark ${font.variable}`}>
       <body className="min-h-dvh antialiased">
         {children}
         {/* Bottom-centre: the top-right corner belongs to the debug overlay. */}
-        <Toaster theme="dark" position="bottom-center" />
+        <Toaster
+          theme="dark"
+          position="bottom-center"
+          style={
+            {
+              '--normal-bg': 'var(--popover)',
+              '--normal-text': 'var(--popover-foreground)',
+              '--normal-border': 'var(--border)',
+              '--border-radius': 'var(--radius)',
+              fontFamily: 'var(--font-sans)',
+            } as React.CSSProperties
+          }
+        />
       </body>
     </html>
   );

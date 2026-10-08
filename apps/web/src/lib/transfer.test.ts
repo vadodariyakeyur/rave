@@ -77,10 +77,11 @@ describe('transfer', () => {
 
     const source = bytes(70_000);
     const received = receive(to);
-    await send(from, { bytes: source, fileName: 'track.mp3' });
+    await send(from, { trackId: 't1', bytes: source, fileName: 'track.mp3' });
     const result = await received;
 
     assert.equal(result.fileName, 'track.mp3');
+    assert.equal(result.trackId, 't1');
     assert.deepEqual(new Uint8Array(result.bytes), new Uint8Array(source));
   });
 
@@ -92,7 +93,7 @@ describe('transfer', () => {
 
     const source = bytes(10);
     const received = receive(to);
-    await send(from, { bytes: source, fileName: 't.wav' });
+    await send(from, { trackId: 't1', bytes: source, fileName: 't.wav' });
     assert.deepEqual(new Uint8Array((await received).bytes), new Uint8Array(source));
   });
 
@@ -105,7 +106,7 @@ describe('transfer', () => {
     const sent: number[] = [];
     const got: number[] = [];
     const received = receive(to, (p) => got.push(p));
-    await send(from, { bytes: bytes(70_000), fileName: 't.mp3' }, (p) => sent.push(p));
+    await send(from, { trackId: 't1', bytes: bytes(70_000), fileName: 't.mp3' }, (p) => sent.push(p));
     await received;
 
     assert.ok(sent.length > 1, 'a single 100% jump is not progress');
@@ -127,7 +128,7 @@ describe('transfer', () => {
       from.wedged = true;
 
       // Bigger than the high-water mark, so the sender actually has to wait.
-      const result = send(from, { bytes: bytes(2_000_000), fileName: 't.mp3' });
+      const result = send(from, { trackId: 't1', bytes: bytes(2_000_000), fileName: 't.mp3' });
       const rejected = assert.rejects(result, /stalled/i);
 
       // The send loop awaits between chunks; the timer only starts once it
@@ -143,7 +144,7 @@ describe('transfer', () => {
   it('fails rather than hanging when the channel closes mid-transfer', async () => {
     const from = channel();
     from.wedged = true;
-    const result = send(from, { bytes: bytes(2_000_000), fileName: 't.mp3' });
+    const result = send(from, { trackId: 't1', bytes: bytes(2_000_000), fileName: 't.mp3' });
     const rejected = assert.rejects(result, /closed/i);
 
     await drained();
@@ -162,8 +163,29 @@ describe('transfer', () => {
     const from = channel();
     from.peer = to;
     const source = bytes(100);
-    await send(from, { bytes: source, fileName: 't.mp3' });
+    await send(from, { trackId: 't1', bytes: source, fileName: 't.mp3' });
     assert.deepEqual(new Uint8Array((await received).bytes), new Uint8Array(source));
+  });
+
+  it('carries one file after another down the same channel, each named', async () => {
+    // A playlist is many files on one wire. Each has to come out whole and
+    // know which track it is.
+    const from = channel();
+    const to = channel();
+    from.peer = to;
+
+    const first = receive(to);
+    await send(from, { trackId: 'a', bytes: bytes(40_000), fileName: 'a.mp3' });
+    const gotA = await first;
+
+    const progress: string[] = [];
+    const second = receive(to, (_fraction, trackId) => progress.push(trackId));
+    await send(from, { trackId: 'b', bytes: bytes(20_000), fileName: 'b.mp3' });
+    const gotB = await second;
+
+    assert.deepEqual([gotA.trackId, gotA.bytes.byteLength], ['a', 40_000]);
+    assert.deepEqual([gotB.trackId, gotB.bytes.byteLength], ['b', 20_000]);
+    assert.ok(progress.length > 0 && progress.every((id) => id === 'b'));
   });
 });
 

@@ -1,32 +1,43 @@
 @import "tailwindcss";
+/* Every colour, radius, shadow and font. Replaceable: see the file. */
+@import "./theme.css";
 
 /* Tailwind 4 is CSS-first: there is no tailwind.config.js and that is correct,
-   not a missing file. Tokens below are the shadcn/ui variable set.
+   not a missing file. What is here is what a theme does not carry: motion,
+   and the few native controls that need styling by hand. */
 
-   Dark mode only — no next-themes, no toggle. The light values are absent
-   rather than unused; add a :root block if light mode is ever wanted. */
+@custom-variant dark (&:is(.dark *));
 
 @theme {
-  --color-background: oklch(0.145 0 0);
-  --color-foreground: oklch(0.985 0 0);
-  --color-card: oklch(0.205 0 0);
-  --color-card-foreground: oklch(0.985 0 0);
-  --color-popover: oklch(0.205 0 0);
-  --color-popover-foreground: oklch(0.985 0 0);
-  --color-primary: oklch(0.922 0 0);
-  --color-primary-foreground: oklch(0.205 0 0);
-  --color-secondary: oklch(0.269 0 0);
-  --color-secondary-foreground: oklch(0.985 0 0);
-  --color-muted: oklch(0.269 0 0);
-  --color-muted-foreground: oklch(0.708 0 0);
-  --color-accent: oklch(0.269 0 0);
-  --color-accent-foreground: oklch(0.985 0 0);
-  --color-destructive: oklch(0.704 0.191 22.216);
-  --color-destructive-foreground: oklch(0.985 0 0);
-  --color-border: oklch(1 0 0 / 10%);
-  --color-input: oklch(1 0 0 / 15%);
-  --color-ring: oklch(0.556 0 0);
-  --radius: 0.625rem;
+  --animate-eq: eq 0.9s ease-in-out infinite;
+  --animate-rise: rise 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  --animate-pop: pop 0.3s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  --animate-drop: drop 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  --animate-ring: ring 2.4s ease-out infinite;
+  --animate-float: float 4s ease-in infinite;
+
+  @keyframes eq {
+    0%, 100% { transform: scaleY(0.3); }
+    50% { transform: scaleY(1); }
+  }
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(14px); }
+  }
+  @keyframes pop {
+    from { opacity: 0; transform: scale(0.94); }
+  }
+  @keyframes drop {
+    from { opacity: 0; transform: translateY(-12px); }
+  }
+  @keyframes ring {
+    from { opacity: 0.5; transform: scale(0.6); }
+    to { opacity: 0; transform: scale(2.2); }
+  }
+  @keyframes float {
+    0% { opacity: 0; transform: translateY(0); }
+    20% { opacity: 0.7; }
+    100% { opacity: 0; transform: translateY(-70px); }
+  }
 }
 
 @layer base {
@@ -34,6 +45,98 @@
   body {
     background-color: var(--color-background);
     color: var(--color-foreground);
+    font-family: var(--font-sans);
+    letter-spacing: var(--tracking-normal);
     -webkit-font-smoothing: antialiased;
+  }
+  h1, h2 {
+    letter-spacing: -0.02em;
+    line-height: 1.1;
+  }
+
+  /* The backdrop: a dot grid sliding by one tile, so the loop has no seam,
+     under two washes of theme colour that wander. Behind everything, and
+     never in the way of a tap. */
+  body::before, body::after {
+    content: '';
+    position: fixed;
+    z-index: -1;
+    pointer-events: none;
+  }
+  body::before {
+    inset: -28px;
+    background-image: radial-gradient(circle, var(--color-border) 1.5px, transparent 2px);
+    background-size: 28px 28px;
+    opacity: 0.9;
+    mask-image: radial-gradient(ellipse at 50% 0%, black 20%, transparent 80%);
+    animation: backdrop-dots 5s linear infinite;
+  }
+  body::after {
+    inset: -25%;
+    background-image:
+      radial-gradient(32% 32% at 22% 30%, color-mix(in oklch, var(--color-primary) 22%, transparent), transparent 70%),
+      radial-gradient(30% 30% at 78% 68%, color-mix(in oklch, var(--color-chart-2) 26%, transparent), transparent 70%);
+    animation: backdrop-wash 22s ease-in-out infinite alternate;
+  }
+  @keyframes backdrop-dots {
+    to { transform: translate(28px, 28px); }
+  }
+  @keyframes backdrop-wash {
+    from { transform: translate(-4%, 3%) rotate(-6deg) scale(1); }
+    to { transform: translate(5%, -4%) rotate(8deg) scale(1.15); }
+  }
+
+  /* The one native control the app keeps (see OffsetSlider). */
+  input[type='range'] {
+    appearance: none;
+    height: 2.75rem;
+    background: transparent;
+    cursor: pointer;
+  }
+  input[type='range']::-webkit-slider-runnable-track {
+    height: 0.625rem;
+    border-radius: 999px;
+    background: var(--color-muted);
+  }
+  input[type='range']::-moz-range-track {
+    height: 0.625rem;
+    border-radius: 999px;
+    background: var(--color-muted);
+  }
+  input[type='range']::-webkit-slider-thumb {
+    appearance: none;
+    width: 1.75rem;
+    height: 1.75rem;
+    margin-top: -0.5625rem;
+    border-radius: 999px;
+    border: 2px solid var(--color-primary-foreground);
+    background: var(--color-primary);
+    box-shadow: var(--shadow-sm);
+  }
+  input[type='range']::-moz-range-thumb {
+    width: 1.5rem;
+    height: 1.5rem;
+    border-radius: 999px;
+    border: 2px solid var(--color-primary-foreground);
+    background: var(--color-primary);
+    box-shadow: var(--shadow-sm);
+  }
+  input[type='range']:focus-visible {
+    outline: 2px solid var(--color-ring);
+    outline-offset: 2px;
+    border-radius: 999px;
+  }
+
+  /* Nothing loops and nothing slides in; states still change, at once. */
+  @media (prefers-reduced-motion: reduce) {
+    *, ::before, ::after {
+      animation-duration: 0.01ms !important;
+      animation-delay: 0s !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+  @media (prefers-contrast: more) {
+    * { border-color: var(--color-foreground); }
   }
 }

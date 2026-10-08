@@ -4,27 +4,27 @@ import { cn } from '@/lib/utils';
 
 // Vendored from shadcn/ui — this file is owned in-repo and editable,
 // not a dependency. `npx shadcn@latest add <name>` drops siblings here.
+//
+// A button sits on the theme's shadow and is pushed down into it: the
+// feedback is on the press itself, not on release.
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-ring)] disabled:pointer-events-none disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0",
+  'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-sm font-semibold transition-[translate,scale,box-shadow,background-color] duration-100 ease-out active:translate-y-1 active:shadow-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0',
   {
     variants: {
       variant: {
-        default:
-          'bg-[var(--color-primary)] text-[var(--color-primary-foreground)] shadow hover:opacity-90',
-        destructive:
-          'bg-[var(--color-destructive)] text-[var(--color-destructive-foreground)] shadow-sm hover:opacity-90',
-        outline:
-          'border border-[var(--color-border)] bg-transparent shadow-sm hover:bg-[var(--color-accent)]',
-        secondary:
-          'bg-[var(--color-secondary)] text-[var(--color-secondary-foreground)] shadow-sm hover:opacity-80',
-        ghost: 'hover:bg-[var(--color-accent)]',
-        link: 'text-[var(--color-primary)] underline-offset-4 hover:underline',
+        default: 'bg-primary text-primary-foreground shadow-md hover:brightness-105',
+        destructive: 'bg-destructive text-destructive-foreground shadow-md hover:brightness-105',
+        outline: 'border-2 border-border bg-card text-card-foreground shadow-md hover:bg-accent',
+        secondary: 'bg-secondary text-secondary-foreground shadow-md hover:brightness-110',
+        // Nothing underneath to press into, so these give instead.
+        ghost: 'hover:bg-accent hover:text-accent-foreground active:translate-y-0 active:scale-90',
+        link: 'text-primary underline-offset-4 hover:underline active:translate-y-0',
       },
       size: {
-        default: 'h-9 px-4 py-2',
-        sm: 'h-8 rounded-md px-3 text-xs',
-        lg: 'h-10 rounded-md px-8',
-        icon: 'h-9 w-9',
+        default: 'h-11 px-5',
+        sm: 'h-9 px-4',
+        lg: 'h-13 px-7 text-base',
+        icon: 'size-10',
       },
     },
     defaultVariants: { variant: 'default', size: 'default' },

@@ -6,7 +6,9 @@ import {
   type CreateRoom,
   type IceServer,
   type JoinRoom,
+  type ErrorMessage,
   type RoomState,
+  type RoomSummary,
   type ServerMessage,
 } from '@rave/protocol';
 
@@ -25,6 +27,19 @@ export interface Entered {
    */
   iceServers: IceServer[];
   state: RoomState;
+}
+
+/**
+ * The server said no. Carries its code as well as its words, because the
+ * join screen does different things for a missing passcode and a wrong one.
+ */
+export class EnterRefused extends Error {
+  constructor(
+    message: string,
+    readonly code: ErrorMessage['code'],
+  ) {
+    super(message);
+  }
 }
 
 /** The slice of WebSocket this needs — which the real one already is. */
@@ -93,7 +108,7 @@ export class Signaling {
       let peerId: string | undefined;
       let iceServers: IceServer[] = [];
       const unsubscribeMessage = this.onMessage((msg) => {
-        if (msg.type === 'error') return fail(new Error(msg.message));
+        if (msg.type === 'error') return fail(new EnterRefused(msg.message, msg.code));
         if (msg.type === 'server-hello') {
           iceServers = msg.iceServers;
           return;
@@ -114,6 +129,18 @@ export class Signaling {
 
       this.send(request);
     });
+  }
+
+  /**
+   * The room list, now and every time it changes, for as long as this
+   * socket is open. The homepage's whole use of the server.
+   */
+  watchRooms(onList: (rooms: RoomSummary[]) => void): () => void {
+    const unsubscribe = this.onMessage((msg) => {
+      if (msg.type === 'room-list') onList(msg.rooms);
+    });
+    this.send({ type: 'watch-rooms' });
+    return unsubscribe;
   }
 
   /**

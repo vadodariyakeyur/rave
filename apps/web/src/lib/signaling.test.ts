@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { CONNECTION_LOST, Signaling, type SignalingSocket } from './signaling.ts';
+import { CONNECTION_LOST, EnterRefused, Signaling, type SignalingSocket } from './signaling.ts';
 
 /**
  * The handshake that turns a socket into a place in a room. The socket is
@@ -62,18 +62,18 @@ const roster = {
   type: 'room-state',
   code: 'ABC234',
   roomName: 'Kitchen',
-  locked: false,
-  peers: [{ peerId: ME, displayName: 'Sam', isCreator: false, ready: false }],
+  description: '',
+  peers: [{ peerId: ME, displayName: 'Sam', isCreator: false }],
 };
 
 describe('Signaling', () => {
   it('holds what is sent until the socket opens', () => {
     const { socket, signaling } = connect();
-    signaling.send({ type: 'ready' });
+    signaling.send({ type: 'watch-rooms' });
     assert.deepEqual(socket.sent, []);
 
     socket.open();
-    assert.deepEqual(socket.sent, [{ type: 'ready' }]);
+    assert.deepEqual(socket.sent, [{ type: 'watch-rooms' }]);
   });
 
   it('drops anything that fails the schema', () => {
@@ -109,7 +109,6 @@ describe('entering a room', () => {
       type: 'create-room',
       roomName: 'Kitchen',
       displayName: 'Sam',
-      durationSeconds: 10,
     });
     socket.deliver({
       type: 'room-created',
@@ -137,13 +136,20 @@ describe('entering a room', () => {
     await entering;
   });
 
-  it("rejects with the server's own words and hangs up when refused", async () => {
+  it("rejects with the server's own words and code, and hangs up, when refused", async () => {
     const { socket, signaling } = connect();
     socket.open();
     const entering = signaling.enter(join);
-    socket.deliver({ type: 'error', code: 'room-locked', message: 'That room has already started playing.' });
+    socket.deliver({ type: 'error', code: 'passcode-required', message: 'This room needs a passcode.' });
 
-    await assert.rejects(entering, { message: 'That room has already started playing.' });
+    // The code as well as the words: the join screen asks for a passcode on
+    // one refusal and not on another.
+    await assert.rejects(entering, (err) => {
+      assert.ok(err instanceof EnterRefused);
+      assert.equal(err.message, 'This room needs a passcode.');
+      assert.equal(err.code, 'passcode-required');
+      return true;
+    });
     assert.equal(socket.readyState, 3);
   });
 
@@ -164,7 +170,33 @@ describe('entering a room', () => {
 
     assert.equal(socket.listening('close'), 0);
     // And an error after entering is not this handshake's to act on.
-    socket.deliver({ type: 'error', code: 'peers-not-ready', message: 'Not yet.' });
+    socket.deliver({ type: 'error', code: 'not-creator', message: 'Not yours.' });
     assert.equal(socket.readyState, 1, 'the socket stays up');
+  });
+});
+
+describe('watching the room list', () => {
+  const room = {
+    code: 'ABC234',
+    roomName: 'Kitchen',
+    description: '',
+    memberCount: 1,
+    hasPasscode: false,
+    nowPlaying: null,
+  };
+
+  it('asks once, then hands on every list until told to stop', () => {
+    const { socket, signaling } = connect();
+    socket.open();
+    const lists: unknown[] = [];
+    const stop = signaling.watchRooms((rooms) => lists.push(rooms));
+    assert.deepEqual(socket.sent, [{ type: 'watch-rooms' }]);
+
+    socket.deliver({ type: 'room-list', rooms: [] });
+    socket.deliver({ type: 'room-list', rooms: [room] });
+    stop();
+    socket.deliver({ type: 'room-list', rooms: [] });
+
+    assert.deepEqual(lists, [[], [room]]);
   });
 });

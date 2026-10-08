@@ -1,16 +1,15 @@
 'use client';
 
 import { RoomCode } from '@rave/protocol';
-import { armAudio, decodeBytes, type DecodedTrack } from './audio';
+import { armAudio } from './audio';
 import { LiveRoom } from './room';
 import { Signaling } from './signaling';
 
 /**
  * The room this tab is in, held outside React.
  *
- * The socket, the armed AudioContext and the decoded buffer cannot be
- * recreated after the create tap — arming needs a user gesture, and the
- * buffer is the only copy that will ever be sent to peers. So the room
+ * The socket and the armed AudioContext cannot be recreated after the tap
+ * that made them — arming needs a user gesture. So the room
  * survives the route change here instead of in component state, which the
  * navigation would drop. A refresh deliberately loses this: that is the
  * reload landing on the pre-join tap again, not a bug.
@@ -39,37 +38,22 @@ export function subscribeRoom(listener: () => void): () => void {
 }
 
 /**
- * Arm audio, decode, then create the room — in that order, and only that
- * order. The AudioContext must be constructed inside the caller's gesture
- * (so this must be called synchronously from the handler), and the room must
- * not exist until playback is known to be possible.
+ * Arm audio, then create the room. The AudioContext must be constructed
+ * inside the caller's gesture, so this must be called synchronously from the
+ * handler. The room starts with no tracks: the creator adds them inside it.
  */
 export async function createRoom(input: {
   roomName: string;
+  description?: string;
   displayName: string;
-  file: File;
+  passcode?: string;
 }): Promise<LiveRoom> {
   const audioContext = new AudioContext();
   try {
     await armAudio(audioContext);
-    // Read once: decodeBytes copies for the decoder, so these survive to be
-    // sent to every peer.
-    const bytes = await input.file.arrayBuffer();
-    const decoded: DecodedTrack = await decodeBytes(audioContext, bytes);
-
     const signaling = new Signaling();
-    const entered = await signaling.enter({
-      type: 'create-room',
-      roomName: input.roomName,
-      displayName: input.displayName,
-      durationSeconds: decoded.durationSeconds,
-    });
-    const room = new LiveRoom({
-      signaling,
-      audioContext,
-      entered,
-      file: { buffer: decoded.buffer, bytes, fileName: input.file.name },
-    });
+    const entered = await signaling.enter({ type: 'create-room', ...input });
+    const room = new LiveRoom({ signaling, audioContext, entered, passcode: input.passcode });
     setRoom(room);
     return room;
   } catch (err) {
@@ -85,10 +69,13 @@ export const UNKNOWN_ROOM = 'No room with that code. Check it and try again.';
 /**
  * Arm audio, then join. Same ordering rule as createRoom and the same reason:
  * the AudioContext must be constructed inside the caller's gesture, so this
- * has to be called synchronously from the Join handler. There is no file to
- * decode yet — it arrives from the creator once the room is entered.
+ * has to be called synchronously from the Join handler.
  */
-export async function joinRoom(input: { code: string; displayName: string }): Promise<LiveRoom> {
+export async function joinRoom(input: {
+  code: string;
+  displayName: string;
+  passcode?: string;
+}): Promise<LiveRoom> {
   // A malformed code cannot parse server-side, so without this the person
   // gets "message could not be understood" for what is really a bad link.
   const parsed = RoomCode.safeParse(input.code);
@@ -102,8 +89,9 @@ export async function joinRoom(input: { code: string; displayName: string }): Pr
       type: 'join-room',
       code: parsed.data,
       displayName: input.displayName,
+      passcode: input.passcode,
     });
-    const room = new LiveRoom({ signaling, audioContext, entered });
+    const room = new LiveRoom({ signaling, audioContext, entered, passcode: input.passcode });
     setRoom(room);
     return room;
   } catch (err) {

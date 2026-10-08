@@ -1,7 +1,8 @@
 # rave
 
-Synchronized peer-to-peer audio rooms — one person creates a room with an audio file,
-others join with a room code, and every device starts playback at the same instant.
+Synchronized peer-to-peer audio rooms — one person creates a room and adds tracks to its
+playlist, others join from the room list or with a room code, and every device plays the
+same track at the same instant.
 
 ## Agent skills
 
@@ -17,5 +18,7 @@ The default five-role vocabulary: `needs-triage`, `needs-info`, `ready-for-agent
 
 ### Domain docs
 
-Single-context: `CONTEXT.md` and `docs/adr/` at the repo root.
-See `docs/agents/domain.md`.
+Single-context: `CONTEXT.md` (what the system is and how it behaves), `GLOSSARY.md` (the
+terms, and the ones to avoid) and `docs/adr/` at the repo root. These are the source of truth
+for anything about the project: read them first, use the glossary's words, and if the code
+disagrees, say so rather than picking one silently. See `docs/agents/domain.md`.

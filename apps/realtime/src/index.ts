@@ -17,7 +17,7 @@ const rooms = new RoomRegistry();
  */
 const metrics = new Metrics(rooms);
 
-const hub = new RoomHub({ rooms, metrics, log });
+const hub = new RoomHub({ rooms, log });
 
 const server = createServer((req, res) => {
   if (req.url === '/metrics') {

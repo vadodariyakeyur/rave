@@ -72,7 +72,6 @@ describe('create-room', () => {
     type: 'create-room',
     roomName: 'Kitchen',
     displayName: 'Keyur',
-    durationSeconds: 212.5,
   };
 
   it('parses a valid create-room message', () => {
@@ -87,15 +86,23 @@ describe('create-room', () => {
     assert.equal(msg?.type === 'create-room' && msg.displayName, 'Keyur');
   });
 
+  it('takes an optional description and passcode', () => {
+    const msg = parseClientMessage(
+      JSON.stringify({ ...valid, description: '  Friday playlist ', passcode: 'hunter2' }),
+    );
+    assert.equal(msg?.type === 'create-room' && msg.description, 'Friday playlist');
+    assert.equal(msg?.type === 'create-room' && msg.passcode, 'hunter2');
+  });
+
   it('rejects malformed create-room messages', () => {
     const bad = [
       { ...valid, roomName: '' },
       { ...valid, roomName: '   ' },
       { ...valid, displayName: '' },
-      { ...valid, durationSeconds: 0 },
-      { ...valid, durationSeconds: -5 },
-      { ...valid, durationSeconds: Number.POSITIVE_INFINITY },
-      { ...valid, durationSeconds: 'long' },
+      { ...valid, description: 'x'.repeat(201) },
+      // A passcode of one key press is not a gate.
+      { ...valid, passcode: 'abc' },
+      { ...valid, passcode: 'x'.repeat(33) },
       { ...valid, roomName: 'x'.repeat(65) },
       { ...valid, displayName: 'x'.repeat(33) },
     ];
@@ -138,13 +145,12 @@ describe('server room messages', () => {
         type: 'room-state',
         code: 'ABC234',
         roomName: 'Kitchen',
-        locked: false,
+        description: '',
         peers: [
           {
             peerId: '6f1b3c7e-4f3a-4b2e-8f1a-2c3d4e5f6a7b',
             displayName: 'Keyur',
             isCreator: true,
-            ready: true,
           },
         ],
       }),
@@ -280,17 +286,52 @@ test('rejects a server-hello with no ice server list at all', () => {
   assert.equal(parseServerMessage(raw), null);
 });
 
-describe('ready', () => {
-  it('parses a ready message', () => {
-    assert.equal(parseClientMessage(JSON.stringify({ type: 'ready' }))?.type, 'ready');
+describe('the room list', () => {
+  it('parses a list of rooms without any passcode in it', () => {
+    const msg = parseServerMessage(
+      JSON.stringify({
+        type: 'room-list',
+        rooms: [
+          {
+            code: 'ABC234',
+            roomName: 'Kitchen',
+            description: '',
+            memberCount: 3,
+            hasPasscode: true,
+            nowPlaying: null,
+          },
+        ],
+      }),
+    );
+    assert.equal(msg?.type === 'room-list' && msg.rooms[0]?.hasPasscode, true);
   });
 
-  it('takes no payload, so a peer cannot mark anyone else ready', () => {
-    // Readiness is a fact about the sender's own device. The server knows
-    // which socket sent this; a peerId field would be a claim to check.
+  it('parses the messages that ask for it and feed it', () => {
+    assert.equal(parseClientMessage(JSON.stringify({ type: 'watch-rooms' }))?.type, 'watch-rooms');
     assert.equal(
-      parseClientMessage(JSON.stringify({ type: 'ready', peerId: '11111111-1111-4111-8111-111111111111' })),
-      null,
+      parseClientMessage(JSON.stringify({ type: 'now-playing', title: null }))?.type,
+      'now-playing',
     );
+  });
+});
+
+describe('join-room with a passcode', () => {
+  it('lets a too-short guess through, so the server can call it wrong', () => {
+    const msg = parseClientMessage(
+      JSON.stringify({ type: 'join-room', code: 'ABC234', displayName: 'Sam', passcode: 'a' }),
+    );
+    assert.equal(msg?.type === 'join-room' && msg.passcode, 'a');
+  });
+});
+
+describe('kick', () => {
+  it('names the member by peer id, and nothing else', () => {
+    assert.equal(
+      parseClientMessage(
+        JSON.stringify({ type: 'kick', peerId: '11111111-1111-4111-8111-111111111111' }),
+      )?.type,
+      'kick',
+    );
+    assert.equal(parseClientMessage(JSON.stringify({ type: 'kick', peerId: 'sam' })), null);
   });
 });

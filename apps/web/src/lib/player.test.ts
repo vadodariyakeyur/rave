@@ -89,12 +89,12 @@ describe('scheduling a start', () => {
     // which is the whole reason the conversion exists.
     const clock = monotonic(1000);
     const out = sink(4);
-    const player = new Player({ every: noTimers, sink: out, buffer: buffer(120), now: clock.now });
+    const player = new Player({ every: noTimers, sink: out, track: { id: 't', buffer: buffer(120) }, now: clock.now });
 
     // The creator's clock runs 250ms ahead of ours, and it cued a start
     // 500ms into its own future: 1750 on its clock is 1500 on ours, which
     // is 500ms from now, which is audio time 4.5.
-    apply(player, { type: 'play', startAt: 1750, fromSeconds: 0 }, 250);
+    apply(player, { type: 'play', trackId: 't', startAt: 1750, fromSeconds: 0 }, 250);
 
     assert.equal(out.last().started?.when, 4.5);
     assert.equal(out.last().started?.offset, 0);
@@ -104,16 +104,16 @@ describe('scheduling a start', () => {
   it('gives two peers with different offsets the same real instant', () => {
     // The point of the product: same cue, same wall-clock moment, even
     // though neither device agrees on what time it is.
-    const cue = { type: 'play', startAt: 5_000, fromSeconds: 0 } as const;
+    const cue = { type: 'play', trackId: 't', startAt: 5_000, fromSeconds: 0 } as const;
 
     const a = sink(10);
-    const playerA = new Player({ every: noTimers, sink: a, buffer: buffer(60), now: monotonic(4_800).now });
+    const playerA = new Player({ every: noTimers, sink: a, track: { id: 't', buffer: buffer(60) }, now: monotonic(4_800).now });
     apply(playerA, cue, 0); // The creator itself: no offset.
 
     const b = sink(99);
     // B's clock reads 3600 when the creator's reads 4800: add 1200 to B's
     // clock to get the creator's, which is exactly what clock.ts measures.
-    const playerB = new Player({ every: noTimers, sink: b, buffer: buffer(60), now: monotonic(3_600).now });
+    const playerB = new Player({ every: noTimers, sink: b, track: { id: 't', buffer: buffer(60) }, now: monotonic(3_600).now });
     apply(playerB, cue, 1_200);
 
     // Both land 200ms out on their own audio clocks: the same moment.
@@ -126,16 +126,16 @@ describe('scheduling a start', () => {
   it('applies the user offset on top of the measured one', () => {
     // #9's slider: a Bluetooth device that is 150ms late starts 150ms early.
     const out = sink(0);
-    const player = new Player({ every: noTimers, sink: out, buffer: buffer(60), now: monotonic(0).now });
-    apply(player, { type: 'play', startAt: 1_000, fromSeconds: 0 }, 0, -150);
+    const player = new Player({ every: noTimers, sink: out, track: { id: 't', buffer: buffer(60) }, now: monotonic(0).now });
+    apply(player, { type: 'play', trackId: 't', startAt: 1_000, fromSeconds: 0 }, 0, -150);
     assert.equal(out.last().started?.when, 0.85);
   });
 
   it('starts a late cue mid-track rather than from the beginning', () => {
     // A peer whose cue arrived 2s late must join in sync, not alone at 0:00.
     const out = sink(0);
-    const player = new Player({ every: noTimers, sink: out, buffer: buffer(60), now: monotonic(3_000).now });
-    apply(player, { type: 'play', startAt: 1_000, fromSeconds: 0 }, 0);
+    const player = new Player({ every: noTimers, sink: out, track: { id: 't', buffer: buffer(60) }, now: monotonic(3_000).now });
+    apply(player, { type: 'play', trackId: 't', startAt: 1_000, fromSeconds: 0 }, 0);
 
     assert.equal(out.last().started?.when, 0, 'immediately, not in the past');
     assert.equal(out.last().started?.offset, 2, 'two seconds in');
@@ -143,16 +143,16 @@ describe('scheduling a start', () => {
 
   it('resumes from where the cue says, not from zero', () => {
     const out = sink(0);
-    const player = new Player({ every: noTimers, sink: out, buffer: buffer(60), now: monotonic(0).now });
-    apply(player, { type: 'play', startAt: 500, fromSeconds: 30 }, 0);
+    const player = new Player({ every: noTimers, sink: out, track: { id: 't', buffer: buffer(60) }, now: monotonic(0).now });
+    apply(player, { type: 'play', trackId: 't', startAt: 500, fromSeconds: 30 }, 0);
     assert.equal(out.last().started?.offset, 30);
     assert.equal(out.last().started?.when, 0.5);
   });
 
   it('starts nothing when the cue is so late the track would be over', () => {
     const out = sink(0);
-    const player = new Player({ every: noTimers, sink: out, buffer: buffer(10), now: monotonic(30_000).now });
-    apply(player, { type: 'play', startAt: 0, fromSeconds: 0 }, 0);
+    const player = new Player({ every: noTimers, sink: out, track: { id: 't', buffer: buffer(10) }, now: monotonic(30_000).now });
+    apply(player, { type: 'play', trackId: 't', startAt: 0, fromSeconds: 0 }, 0);
     assert.equal(out.sources.length, 0);
     assert.equal(player.state().playing, false);
     assert.equal(player.position(), 10);
@@ -160,10 +160,10 @@ describe('scheduling a start', () => {
 
   it('replaces the previous source when a second play cue arrives', () => {
     const out = sink(0);
-    const player = new Player({ every: noTimers, sink: out, buffer: buffer(60), now: monotonic(0).now });
-    apply(player, { type: 'play', startAt: 100, fromSeconds: 0 }, 0);
+    const player = new Player({ every: noTimers, sink: out, track: { id: 't', buffer: buffer(60) }, now: monotonic(0).now });
+    apply(player, { type: 'play', trackId: 't', startAt: 100, fromSeconds: 0 }, 0);
     const first = out.last();
-    apply(player, { type: 'play', startAt: 200, fromSeconds: 10 }, 0);
+    apply(player, { type: 'play', trackId: 't', startAt: 200, fromSeconds: 10 }, 0);
 
     assert.equal(out.sources.length, 2);
     assert.notEqual(first.stopped, undefined, 'the first source was stopped');
@@ -175,8 +175,8 @@ describe('scheduling a start', () => {
 describe('position', () => {
   it('derives from the audio clock, not a counter', () => {
     const out = sink(0);
-    const player = new Player({ every: noTimers, sink: out, buffer: buffer(60), now: monotonic(0).now });
-    apply(player, { type: 'play', startAt: 0, fromSeconds: 0 }, 0);
+    const player = new Player({ every: noTimers, sink: out, track: { id: 't', buffer: buffer(60) }, now: monotonic(0).now });
+    apply(player, { type: 'play', trackId: 't', startAt: 0, fromSeconds: 0 }, 0);
 
     out.currentTime = 12.5;
     assert.equal(player.position(), 12.5);
@@ -186,23 +186,23 @@ describe('position', () => {
     // Between the cue and the instant, the honest answer is "not yet", not
     // a negative number counting down.
     const out = sink(0);
-    const player = new Player({ every: noTimers, sink: out, buffer: buffer(60), now: monotonic(0).now });
-    apply(player, { type: 'play', startAt: 500, fromSeconds: 30 }, 0);
+    const player = new Player({ every: noTimers, sink: out, track: { id: 't', buffer: buffer(60) }, now: monotonic(0).now });
+    apply(player, { type: 'play', trackId: 't', startAt: 500, fromSeconds: 30 }, 0);
     assert.equal(player.position(), 30);
   });
 
   it('never runs past the end of the track', () => {
     const out = sink(0);
-    const player = new Player({ every: noTimers, sink: out, buffer: buffer(10), now: monotonic(0).now });
-    apply(player, { type: 'play', startAt: 0, fromSeconds: 0 }, 0);
+    const player = new Player({ every: noTimers, sink: out, track: { id: 't', buffer: buffer(10) }, now: monotonic(0).now });
+    apply(player, { type: 'play', trackId: 't', startAt: 0, fromSeconds: 0 }, 0);
     out.currentTime = 999;
     assert.equal(player.position(), 10);
   });
 
   it('settles at the end when the source reports it finished', () => {
     const out = sink(0);
-    const player = new Player({ every: noTimers, sink: out, buffer: buffer(10), now: monotonic(0).now });
-    apply(player, { type: 'play', startAt: 0, fromSeconds: 0 }, 0);
+    const player = new Player({ every: noTimers, sink: out, track: { id: 't', buffer: buffer(10) }, now: monotonic(0).now });
+    apply(player, { type: 'play', trackId: 't', startAt: 0, fromSeconds: 0 }, 0);
     out.last().onended?.();
 
     assert.equal(player.state().playing, false);
@@ -218,9 +218,9 @@ describe('drift', () => {
   function playing({ offsetMs = 0, userOffsetMs = 0 } = {}) {
     const out = sink(0);
     const clock = monotonic(1000);
-    const player = new Player({ every: noTimers, sink: out, buffer: buffer(600), now: clock.now });
+    const player = new Player({ every: noTimers, sink: out, track: { id: 't', buffer: buffer(600) }, now: clock.now });
     // Cued to start now, from the top.
-    apply(player, { type: 'play', startAt: 1000 + offsetMs, fromSeconds: 0 }, offsetMs, userOffsetMs);
+    apply(player, { type: 'play', trackId: 't', startAt: 1000 + offsetMs, fromSeconds: 0 }, offsetMs, userOffsetMs);
     return { out, clock, player };
   }
 
@@ -268,7 +268,7 @@ describe('drift', () => {
 
   it('reads zero when nothing is playing', () => {
     const out = sink(0);
-    const player = new Player({ every: noTimers, sink: out, buffer: buffer(60), now: monotonic(0).now });
+    const player = new Player({ every: noTimers, sink: out, track: { id: 't', buffer: buffer(60) }, now: monotonic(0).now });
     assert.equal(player.drift(), 0, 'a stopped track cannot be adrift');
   });
 
@@ -337,7 +337,7 @@ describe('drift', () => {
 
   it('does nothing when there is nothing playing', () => {
     const out = sink(0);
-    const player = new Player({ every: noTimers, sink: out, buffer: buffer(60), now: monotonic(0).now });
+    const player = new Player({ every: noTimers, sink: out, track: { id: 't', buffer: buffer(60) }, now: monotonic(0).now });
     assert.doesNotThrow(() => player.correct());
     assert.equal(out.sources.length, 0);
   });
@@ -349,9 +349,9 @@ describe('drift', () => {
     // would come up already drifting by however late it was.
     const out = sink(0);
     const clock = monotonic(1000);
-    const player = new Player({ every: noTimers, sink: out, buffer: buffer(600), now: clock.now });
+    const player = new Player({ every: noTimers, sink: out, track: { id: 't', buffer: buffer(600) }, now: clock.now });
 
-    apply(player, { type: 'play', startAt: 900, fromSeconds: 0 }, 0);
+    apply(player, { type: 'play', trackId: 't', startAt: 900, fromSeconds: 0 }, 0);
 
     assert.ok(Math.abs(player.position() - 0.1) < 1e-9, `got ${player.position()}`);
     assert.ok(Math.abs(player.drift()) < 1e-6, `got ${player.drift()}ms`);
@@ -364,8 +364,8 @@ describe('the user offset', () => {
     // effect you cannot hear until the next track is not a calibration.
     const out = sink(0);
     const clock = monotonic(1000);
-    const player = new Player({ every: noTimers, sink: out, buffer: buffer(600), now: clock.now });
-    apply(player, { type: 'play', startAt: 1000, fromSeconds: 0 }, 0, 0);
+    const player = new Player({ every: noTimers, sink: out, track: { id: 't', buffer: buffer(600) }, now: clock.now });
+    apply(player, { type: 'play', trackId: 't', startAt: 1000, fromSeconds: 0 }, 0, 0);
     clock.advance(30_000);
     out.currentTime += 30;
 
@@ -381,20 +381,20 @@ describe('the user offset', () => {
   it('holds the value for a track that has not started yet', () => {
     const out = sink(0);
     const clock = monotonic(1000);
-    const player = new Player({ every: noTimers, sink: out, buffer: buffer(600), now: clock.now });
+    const player = new Player({ every: noTimers, sink: out, track: { id: 't', buffer: buffer(600) }, now: clock.now });
 
     player.setUserOffset(-200);
     assert.equal(out.sources.length, 0, 'nothing to reseek');
 
     // And the next cue honours it without being told again.
-    apply(player, { type: 'play', startAt: 1500, fromSeconds: 0 }, 0);
+    apply(player, { type: 'play', trackId: 't', startAt: 1500, fromSeconds: 0 }, 0);
     assert.equal(out.last().started?.when, 0.3, '500ms out, less the 200ms nudge');
   });
 
   it('is a no-op when the value has not actually changed', () => {
     const out = sink(0);
-    const player = new Player({ every: noTimers, sink: out, buffer: buffer(600), now: monotonic(1000).now });
-    apply(player, { type: 'play', startAt: 1000, fromSeconds: 0 }, 0, -200);
+    const player = new Player({ every: noTimers, sink: out, track: { id: 't', buffer: buffer(600) }, now: monotonic(1000).now });
+    apply(player, { type: 'play', trackId: 't', startAt: 1000, fromSeconds: 0 }, 0, -200);
     player.setUserOffset(-200);
     assert.equal(out.sources.length, 1, 'no pointless reseek');
   });
@@ -406,8 +406,8 @@ describe('scheduling a pause', () => {
     // and resume would then start them from positions that disagree.
     const clock = monotonic(1_000);
     const out = sink(0);
-    const player = new Player({ every: noTimers, sink: out, buffer: buffer(60), now: clock.now });
-    apply(player, { type: 'play', startAt: 1_000, fromSeconds: 0 }, 0);
+    const player = new Player({ every: noTimers, sink: out, track: { id: 't', buffer: buffer(60) }, now: clock.now });
+    apply(player, { type: 'play', trackId: 't', startAt: 1_000, fromSeconds: 0 }, 0);
 
     clock.advance(2_000);
     out.currentTime = 2;
@@ -420,8 +420,8 @@ describe('scheduling a pause', () => {
 
   it('corrects the pause instant with the clock offset too', () => {
     const out = sink(0);
-    const player = new Player({ every: noTimers, sink: out, buffer: buffer(60), now: monotonic(0).now });
-    apply(player, { type: 'play', startAt: 0, fromSeconds: 0 }, 0);
+    const player = new Player({ every: noTimers, sink: out, track: { id: 't', buffer: buffer(60) }, now: monotonic(0).now });
+    apply(player, { type: 'play', trackId: 't', startAt: 0, fromSeconds: 0 }, 0);
     apply(player, { type: 'pause', pauseAt: 1_300 }, 300);
     assert.equal(out.last().stopped, 1);
   });
@@ -429,21 +429,21 @@ describe('scheduling a pause', () => {
   it('resumes from where the pause landed', () => {
     const clock = monotonic(0);
     const out = sink(0);
-    const player = new Player({ every: noTimers, sink: out, buffer: buffer(60), now: clock.now });
-    apply(player, { type: 'play', startAt: 0, fromSeconds: 0 }, 0);
+    const player = new Player({ every: noTimers, sink: out, track: { id: 't', buffer: buffer(60) }, now: clock.now });
+    apply(player, { type: 'play', trackId: 't', startAt: 0, fromSeconds: 0 }, 0);
     clock.advance(5_000);
     out.currentTime = 5;
     apply(player, { type: 'pause', pauseAt: 5_000 }, 0);
     assert.equal(player.position(), 5);
 
     // The creator would send fromSeconds from its own player's position.
-    apply(player, { type: 'play', startAt: 5_500, fromSeconds: player.position() }, 0);
+    apply(player, { type: 'play', trackId: 't', startAt: 5_500, fromSeconds: player.position() }, 0);
     assert.equal(out.last().started?.offset, 5);
   });
 
   it('ignores a pause when nothing is playing', () => {
     const out = sink(0);
-    const player = new Player({ every: noTimers, sink: out, buffer: buffer(60), now: monotonic(0).now });
+    const player = new Player({ every: noTimers, sink: out, track: { id: 't', buffer: buffer(60) }, now: monotonic(0).now });
     assert.doesNotThrow(() => apply(player, { type: 'pause', pauseAt: 100 }, 0));
     assert.equal(out.sources.length, 0);
   });
@@ -452,31 +452,31 @@ describe('scheduling a pause', () => {
 describe('lifecycle', () => {
   it('tells subscribers when playback state changes', () => {
     const out = sink(0);
-    const player = new Player({ every: noTimers, sink: out, buffer: buffer(60), now: monotonic(0).now });
+    const player = new Player({ every: noTimers, sink: out, track: { id: 't', buffer: buffer(60) }, now: monotonic(0).now });
     let calls = 0;
     const unsubscribe = player.subscribe(() => calls++);
 
-    apply(player, { type: 'play', startAt: 0, fromSeconds: 0 }, 0);
+    apply(player, { type: 'play', trackId: 't', startAt: 0, fromSeconds: 0 }, 0);
     assert.equal(calls, 1);
     apply(player, { type: 'pause', pauseAt: 0 }, 0);
     assert.equal(calls, 2);
 
     unsubscribe();
-    apply(player, { type: 'play', startAt: 0, fromSeconds: 0 }, 0);
+    apply(player, { type: 'play', trackId: 't', startAt: 0, fromSeconds: 0 }, 0);
     assert.equal(calls, 2, 'an unsubscribed listener hears nothing');
   });
 
   it('stops the audio and ignores later cues once closed', () => {
     // The room ended. A cue still in flight must not restart the track.
     const out = sink(0);
-    const player = new Player({ every: noTimers, sink: out, buffer: buffer(60), now: monotonic(0).now });
-    apply(player, { type: 'play', startAt: 0, fromSeconds: 0 }, 0);
+    const player = new Player({ every: noTimers, sink: out, track: { id: 't', buffer: buffer(60) }, now: monotonic(0).now });
+    apply(player, { type: 'play', trackId: 't', startAt: 0, fromSeconds: 0 }, 0);
     const source = out.last();
 
     player.close();
     assert.notEqual(source.stopped, undefined);
 
-    apply(player, { type: 'play', startAt: 0, fromSeconds: 0 }, 0);
+    apply(player, { type: 'play', trackId: 't', startAt: 0, fromSeconds: 0 }, 0);
     assert.equal(out.sources.length, 1);
   });
 
@@ -491,31 +491,31 @@ describe('lifecycle', () => {
     // life, so there is no rebuild. What is modelled here is why: whoever
     // builds a player is whoever closes it, and a closed one stays deaf.
     const out = sink(0);
-    const track = buffer(60);
+    const track = { id: 't', buffer: buffer(60) };
     let live: Player | undefined;
     const build = () => {
       live?.close();
-      live = new Player({ every: noTimers, sink: out, buffer: track, now: monotonic(0).now });
+      live = new Player({ every: noTimers, sink: out, track, now: monotonic(0).now });
       return live;
     };
 
     const first = build();
-    apply(first, { type: 'play', startAt: 0, fromSeconds: 0 }, 0);
+    apply(first, { type: 'play', trackId: 't', startAt: 0, fromSeconds: 0 }, 0);
     assert.equal(first.state().playing, true, 'the first player plays');
 
     // The rebuild. A stale capture of `first` is now deaf — that is correct,
     // and is exactly why the component must not hold one.
     const second = build();
-    apply(first, { type: 'play', startAt: 0, fromSeconds: 0 }, 0);
+    apply(first, { type: 'play', trackId: 't', startAt: 0, fromSeconds: 0 }, 0);
     assert.equal(first.state().playing, false, 'the closed player stays closed');
 
-    apply(second, { type: 'play', startAt: 0, fromSeconds: 0 }, 0);
+    apply(second, { type: 'play', trackId: 't', startAt: 0, fromSeconds: 0 }, 0);
     assert.equal(second.state().playing, true, 'the creator is audible after a rebuild');
   });
 });
 
 describe('a cue that arrives before it can be acted on', () => {
-  const play = { type: 'play', startAt: 1_500, fromSeconds: 0 } as const;
+  const play = { type: 'play', trackId: 't', startAt: 1_500, fromSeconds: 0 } as const;
 
   it('is held until the track lands, then joins where the room already is', () => {
     // The bug this pins: the creator cues the instant a peer says ready, and
@@ -531,7 +531,7 @@ describe('a cue that arrives before it can be acted on', () => {
 
     // The decode finishes two seconds after the room started.
     clock.advance(2_500);
-    player.load(buffer(60));
+    player.load('t', buffer(60));
 
     assert.equal(out.last().started?.offset, 2, 'two seconds in, with everyone else');
     assert.equal(player.state().playing, true);
@@ -543,10 +543,10 @@ describe('a cue that arrives before it can be acted on', () => {
     // be wrong by hours.
     const clock = monotonic(1_000);
     const out = sink(0);
-    const player = new Player({ every: noTimers, sink: out, buffer: buffer(60), now: clock.now });
+    const player = new Player({ every: noTimers, sink: out, track: { id: 't', buffer: buffer(60) }, now: clock.now });
 
     // The creator's clock is 50s ahead of ours: 51_500 there is 1_500 here.
-    player.cue({ type: 'play', startAt: 51_500, fromSeconds: 0 });
+    player.cue({ type: 'play', trackId: 't', startAt: 51_500, fromSeconds: 0 });
     assert.equal(out.sources.length, 0);
 
     player.setClockOffset(50_000);
@@ -563,7 +563,7 @@ describe('a cue that arrives before it can be acted on', () => {
     player.cue(play);
     player.cue({ type: 'pause', pauseAt: 2_000 });
 
-    player.load(buffer(60));
+    player.load('t', buffer(60));
 
     assert.equal(out.sources.length, 0);
     assert.equal(player.state().playing, false);
@@ -573,7 +573,7 @@ describe('a cue that arrives before it can be acted on', () => {
     const out = sink(0);
     const player = new Player({ every: noTimers, sink: out, now: monotonic(0).now });
     player.cue(play);
-    player.load(buffer(60));
+    player.load('t', buffer(60));
     player.setClockOffset(0);
     player.setClockOffset(1);
 
@@ -586,7 +586,7 @@ describe('a cue that arrives before it can be acted on', () => {
     player.setClockOffset(0);
     player.cue(play);
     player.close();
-    player.load(buffer(60));
+    player.load('t', buffer(60));
     assert.equal(out.sources.length, 0);
   });
 });
@@ -612,9 +612,9 @@ describe('following the clock as it is re-measured', () => {
     const out = sink(0);
     const clock = monotonic(1_000);
     const timers = cadence();
-    const player = new Player({ sink: out, buffer: buffer(600), now: clock.now, every: timers.every });
+    const player = new Player({ sink: out, track: { id: 't', buffer: buffer(600) }, now: clock.now, every: timers.every });
     player.setClockOffset(0);
-    player.cue({ type: 'play', startAt: 1_000, fromSeconds: 0 });
+    player.cue({ type: 'play', trackId: 't', startAt: 1_000, fromSeconds: 0 });
     const elapse = (seconds: number) => {
       clock.advance(seconds * 1000);
       out.currentTime += seconds;
@@ -670,7 +670,7 @@ describe('following the clock as it is re-measured', () => {
     player.cue({ type: 'pause', pauseAt: 1_000 });
     assert.equal(timers.running.size, 0, 'a paused track cannot drift');
 
-    player.cue({ type: 'play', startAt: 1_000, fromSeconds: 0 });
+    player.cue({ type: 'play', trackId: 't', startAt: 1_000, fromSeconds: 0 });
     assert.equal(timers.running.size, 1);
 
     player.close();
@@ -688,5 +688,93 @@ describe('following the clock as it is re-measured', () => {
     const { out, timers } = playing();
     out.last().onended?.();
     assert.equal(timers.running.size, 0);
+  });
+});
+
+describe('moving between tracks', () => {
+  function playingA() {
+    const out = sink(0);
+    const clock = monotonic(1_000);
+    const player = new Player({ every: noTimers, sink: out, track: { id: 'a', buffer: buffer(60) }, now: clock.now });
+    player.setClockOffset(0);
+    player.cue({ type: 'play', trackId: 'a', startAt: 1_000, fromSeconds: 0 });
+    return { out, clock, player };
+  }
+
+  it('goes quiet the moment the room moves to a track it has not decoded', () => {
+    // Playing the old track on until the new one is ready is two devices
+    // playing two different songs.
+    const { out, player } = playingA();
+    player.cue({ type: 'play', trackId: 'b', startAt: 2_000, fromSeconds: 0 });
+
+    assert.notEqual(out.sources[0]!.stopped, undefined);
+    assert.equal(player.state().playing, false);
+    assert.equal(out.sources.length, 1, 'and plays nothing until b is here');
+  });
+
+  it('plays the new track when it lands, from where the room has got to', () => {
+    const { out, clock, player } = playingA();
+    player.cue({ type: 'play', trackId: 'b', startAt: 2_000, fromSeconds: 0 });
+    clock.advance(2_500);
+    player.load('b', buffer(120));
+
+    assert.equal(out.last().started?.offset, 1.5);
+    assert.equal(player.state().playing, true);
+  });
+
+  it('does not play a cue for one track on another that happens to be loaded', () => {
+    const { out, player } = playingA();
+    player.cue({ type: 'play', trackId: 'b', startAt: 2_000, fromSeconds: 0 });
+    player.load('c', buffer(30));
+    assert.equal(out.sources.length, 1);
+  });
+
+  it('starts a newly loaded track from the top, not where the last one was', () => {
+    const { out, clock, player } = playingA();
+    clock.advance(10_000);
+    out.currentTime = 10;
+    player.load('b', buffer(120));
+
+    assert.equal(player.position(), 0);
+    assert.equal(player.state().playing, false);
+  });
+
+  it('measures position against the track that is loaded', () => {
+    const { out, player } = playingA();
+    player.load('b', buffer(5));
+    player.cue({ type: 'play', trackId: 'b', startAt: 1_000, fromSeconds: 0 });
+    out.currentTime = 999;
+    assert.equal(player.position(), 5);
+  });
+});
+
+describe('stop', () => {
+  it('silences the track and goes back to the start', () => {
+    const out = sink(0);
+    const clock = monotonic(1_000);
+    const player = new Player({ every: noTimers, sink: out, track: { id: 't', buffer: buffer(60) }, now: clock.now });
+    player.setClockOffset(0);
+    player.cue({ type: 'play', trackId: 't', startAt: 1_000, fromSeconds: 0 });
+    clock.advance(10_000);
+    out.currentTime = 10;
+
+    let notified = 0;
+    player.subscribe(() => notified++);
+    player.cue({ type: 'stop' });
+
+    assert.notEqual(out.last().stopped, undefined);
+    assert.equal(player.state().playing, false);
+    assert.equal(player.position(), 0);
+    assert.equal(notified, 1);
+  });
+
+  it('cancels a play that was still waiting for its track', () => {
+    const out = sink(0);
+    const player = new Player({ every: noTimers, sink: out, now: monotonic(0).now });
+    player.setClockOffset(0);
+    player.cue({ type: 'play', trackId: 't', startAt: 0, fromSeconds: 0 });
+    player.cue({ type: 'stop' });
+    player.load('t', buffer(60));
+    assert.equal(out.sources.length, 0);
   });
 });

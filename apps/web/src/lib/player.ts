@@ -112,7 +112,8 @@ export interface PlayerState {
  * One device's playback, driven by cues on the shared clock.
  *
  * It exists from the moment audio is armed, before there is a track to play
- * or an offset to play it by, and takes each when it arrives. A cue heard
+ * or an offset to play it by, and takes each when it arrives — a new track
+ * every time the room moves to one. A cue heard
  * before both are in hand is held, not dropped: the creator's cue is one
  * fire-and-forget send with no replay, and dropping it is silence for the
  * rest of the track. So the caller's whole job is to pass things on as they
@@ -127,8 +128,11 @@ export class Player {
   readonly #now: Now;
   readonly #every: Every;
   readonly #listeners = new Set<() => void>();
-  /** Absent for a joiner until the transfer lands. */
-  #buffer: AudioBuffer | undefined;
+  /**
+   * The one decoded track, and which it is. Absent until something has been
+   * selected and decoded; replaced whenever another track is.
+   */
+  #track: { id: string; buffer: AudioBuffer } | undefined;
   #source: AudioBufferSourceNode | undefined;
   /** Where the track was when it last stopped. Resumes pick up here. */
   #pausedAt = 0;
@@ -161,9 +165,14 @@ export class Player {
   #stopCorrecting: (() => void) | undefined;
   #closed = false;
 
-  constructor(input: { sink: AudioSink; buffer?: AudioBuffer; now?: Now; every?: Every }) {
+  constructor(input: {
+    sink: AudioSink;
+    track?: { id: string; buffer: AudioBuffer };
+    now?: Now;
+    every?: Every;
+  }) {
     this.#sink = input.sink;
-    this.#buffer = input.buffer;
+    this.#track = input.track;
     this.#now = input.now ?? (() => performance.now());
     this.#every = input.every ?? realEvery;
   }
@@ -187,13 +196,19 @@ export class Player {
   position(): number {
     if (this.#originAudioTime === undefined) return this.#pausedAt;
     const elapsed = this.#sink.currentTime - this.#originAudioTime;
-    return Math.min(Math.max(elapsed, this.#pausedAt), this.#buffer?.duration ?? 0);
+    return Math.min(Math.max(elapsed, this.#pausedAt), this.#track?.buffer.duration ?? 0);
   }
 
-  /** The decoded track has landed. A cue that was waiting on it plays now. */
-  load(buffer: AudioBuffer): void {
-    if (this.#closed || this.#buffer) return;
-    this.#buffer = buffer;
+  /**
+   * A track has been decoded, replacing whichever was here. A cue that was
+   * waiting on it plays now.
+   */
+  load(id: string, buffer: AudioBuffer): void {
+    if (this.#closed || this.#track?.id === id) return;
+    // Whatever was playing was the old track. Its position means nothing
+    // in this one.
+    this.#halt();
+    this.#track = { id, buffer };
     this.#release();
   }
 
@@ -206,6 +221,9 @@ export class Player {
    */
   cue(cue: Cue): void {
     if (this.#closed) return;
+    // The room has moved to another track. Go quiet now rather than play
+    // the old one on until the new one has decoded.
+    if (cue.type === 'play' && this.#track && cue.trackId !== this.#track.id) this.#halt();
     // Only the latest matters: a play superseded by a pause before either
     // could be acted on is a track that should not be playing.
     this.#held = cue;
@@ -292,13 +310,24 @@ export class Player {
     this.#listeners.clear();
   }
 
-  /** Act on the held cue, if there is now both a track and an offset. */
+  /** Act on the held cue, if there is now an offset and — to play — its track. */
   #release(): void {
     const cue = this.#held;
-    if (!cue || !this.#buffer || this.#clockOffsetMs === undefined) return;
+    if (!cue || this.#clockOffsetMs === undefined) return;
+    if (cue.type === 'play' && cue.trackId !== this.#track?.id) return;
     this.#held = undefined;
     if (cue.type === 'pause') return this.#pause(this.#local(cue.pauseAt));
+    if (cue.type === 'stop') return this.#halt();
     this.#play(cue);
+  }
+
+  /** Silence, back at the start. */
+  #halt(): void {
+    const was = this.#source !== undefined || this.#pausedAt !== 0;
+    this.#stopSource();
+    this.#idle();
+    this.#pausedAt = 0;
+    if (was) this.#notify();
   }
 
   /**
@@ -319,7 +348,7 @@ export class Player {
    * rather than starting from the beginning, alone.
    */
   #play(cue: PlayCue): void {
-    const buffer = this.#buffer;
+    const buffer = this.#track?.buffer;
     if (!buffer) return;
     this.#stopSource();
     const localStartMs = this.#local(cue.startAt);
@@ -376,7 +405,7 @@ export class Player {
     const when = this.#sink.currentTime + Math.max(0, (localPauseMs - this.#now()) / 1000);
     // Where the track will be at that instant — recorded now, because after
     // the stop the audio clock can no longer tell us.
-    this.#pausedAt = Math.min(when - this.#originAudioTime, this.#buffer?.duration ?? 0);
+    this.#pausedAt = Math.min(when - this.#originAudioTime, this.#track?.buffer.duration ?? 0);
     source.onended = null;
     source.stop(when);
     this.#source = undefined;

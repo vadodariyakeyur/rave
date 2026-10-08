@@ -91,7 +91,7 @@ class FakeSignaling {
 }
 
 function peer(peerId: string): Peer {
-  return { peerId, displayName: peerId.slice(0, 4), isCreator: false, ready: false };
+  return { peerId, displayName: peerId.slice(0, 4), isCreator: false };
 }
 
 function meshFor(selfPeerId: string) {

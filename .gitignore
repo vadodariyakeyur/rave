@@ -7,3 +7,5 @@ dist/
 .DS_Store
 caddy-root-ca.crt
 next-env.d.ts
+
+CLAUDE.md

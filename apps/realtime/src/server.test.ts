@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import type { WebSocket } from 'ws';
 import { parseServerMessage, type ServerMessage } from '@rave/protocol';
 import { RoomHub } from './hub.ts';
-import { Metrics } from './metrics.ts';
 import { RoomRegistry } from './rooms.ts';
 import { connectionHandler } from './server.ts';
 
@@ -59,13 +58,10 @@ class FakeSocket {
 }
 
 // A server per test: no room, socket or histogram count carries over.
-let metrics: Metrics;
 let handleConnection: (socket: WebSocket) => void;
 
 beforeEach(() => {
-  const rooms = new RoomRegistry();
-  metrics = new Metrics(rooms);
-  handleConnection = connectionHandler(new RoomHub({ rooms, metrics }));
+  handleConnection = connectionHandler(new RoomHub({ rooms: new RoomRegistry() }));
 });
 
 function connect(): FakeSocket {
@@ -75,13 +71,13 @@ function connect(): FakeSocket {
 }
 
 /** A host and one joiner, already in the same room. */
-function pair() {
+function pair(extra: { passcode?: string } = {}) {
   const host = connect();
-  host.receive({ type: 'create-room', roomName: 'Kitchen', displayName: 'Keyur', durationSeconds: 10 });
+  host.receive({ type: 'create-room', roomName: 'Kitchen', displayName: 'Keyur', ...extra });
   const created = host.last('room-created');
 
   const guest = connect();
-  guest.receive({ type: 'join-room', code: created.code, displayName: 'Sam' });
+  guest.receive({ type: 'join-room', code: created.code, displayName: 'Sam', ...extra });
   const joined = guest.last('room-joined');
 
   return { host, guest, hostId: created.peerId, guestId: joined.peerId, code: created.code };
@@ -136,147 +132,89 @@ describe('signal relay', () => {
   });
 });
 
-describe('ready', () => {
-  it('marks the sender ready and tells the whole room', () => {
+describe('kick', () => {
+  it('tells the kicked member, hangs up on them, and shows the rest a roster without them', () => {
     const { host, guest, guestId } = pair();
-    assert.equal(guest.last('room-state').peers.find((p) => p.peerId === guestId)?.ready, false);
 
-    guest.receive({ type: 'ready' });
+    host.receive({ type: 'kick', peerId: guestId });
 
-    // The host is the one gating the Play button, so the host must see it.
-    assert.equal(host.last('room-state').peers.find((p) => p.peerId === guestId)?.ready, true);
-    assert.equal(guest.last('room-state').peers.find((p) => p.peerId === guestId)?.ready, true);
-  });
-
-  it('ignores a ready from a socket that is in no room', () => {
-    // Otherwise a stray ready before join-room takes the server down.
-    const stray = connect();
-    stray.receive({ type: 'ready' });
-    assert.equal(stray.sent.some((m) => m.type === 'room-state'), false);
-  });
-});
-
-describe('start-playback', () => {
-  /** A host and two joiners, so one can be left behind while another is not. */
-  function trio() {
-    const { host, guest, code, hostId } = pair();
-    const other = connect();
-    other.receive({ type: 'join-room', code, displayName: 'Ada' });
-    return { host, guest, other, code, hostId, otherId: other.last('room-joined').peerId };
-  }
-
-  it('refuses without force while someone is still downloading', () => {
-    const { host } = trio();
-    host.receive({ type: 'start-playback', force: false });
-    assert.equal(host.last('error').code, 'peers-not-ready');
-  });
-
-  it('locks the room and tells everyone once all are ready', () => {
-    const { host, guest, other } = trio();
-    guest.receive({ type: 'ready' });
-    other.receive({ type: 'ready' });
-
-    host.receive({ type: 'start-playback', force: false });
-
-    assert.equal(host.last('room-state').locked, true);
-    assert.equal(guest.last('room-state').locked, true);
-    assert.equal(other.last('room-state').locked, true);
-  });
-
-  it('tells an excluded peer the room is over for them, and nobody else', () => {
-    const { host, guest, other, otherId } = trio();
-    guest.receive({ type: 'ready' });
-
-    host.receive({ type: 'start-playback', force: true });
-
-    assert.equal(other.last('room-closed').reason, 'excluded');
-    // And then hung up on: nothing more will ever be said down that socket,
-    // so holding it open just leaks one per excluded peer.
-    assert.equal(other.closed, true);
-    // The survivors must not see a room-closed of any kind: theirs is playing.
+    assert.equal(guest.last('room-closed').reason, 'kicked');
+    assert.equal(guest.closed, true);
+    assert.equal(host.last('room-state').peers.some((p) => p.peerId === guestId), false);
     assert.equal(host.sent.filter((m) => m.type === 'room-closed').length, 0);
-    assert.equal(guest.sent.filter((m) => m.type === 'room-closed').length, 0);
-    assert.equal(guest.last('room-state').peers.some((p) => p.peerId === otherId), false);
   });
 
-  it('refuses a late join with the locked message', () => {
-    const { host, guest } = trio();
-    guest.receive({ type: 'ready' });
-    host.receive({ type: 'start-playback', force: true });
+  it('lets a kicked member join again on a new connection', () => {
+    const { host, guestId, code } = pair();
+    host.receive({ type: 'kick', peerId: guestId });
 
-    const late = connect();
-    late.receive({ type: 'join-room', code: host.last('room-created').code, displayName: 'Late' });
-    assert.equal(late.last('error').code, 'room-locked');
-  });
+    const back = connect();
+    back.receive({ type: 'join-room', code, displayName: 'Sam' });
 
-  it('refuses a start from a peer who is not the creator', () => {
-    const { guest } = trio();
-    guest.receive({ type: 'start-playback', force: true });
-    assert.equal(guest.last('error').code, 'not-creator');
-  });
-
-  it('survives an excluded peer hanging up afterwards', () => {
-    // Their socket is still open and still thinks it belongs to a peer id.
-    // The close handler must not then mutate a room they left.
-    const { host, guest, other } = trio();
-    guest.receive({ type: 'ready' });
-    host.receive({ type: 'start-playback', force: true });
-
-    const before = guest.sent.length;
-    assert.doesNotThrow(() => other.hangUp());
-    assert.equal(guest.sent.length, before, 'the survivors hear nothing about it');
+    assert.equal(back.last('room-joined').code, code);
+    assert.equal(host.last('room-state').peers.length, 2);
   });
 });
 
-describe('barrier metrics', () => {
-  /** The histogram count, which only moves when a barrier is recorded. */
-  async function barriersRecorded(): Promise<number> {
-    const { body } = await metrics.render();
-    return Number(/^rave_barrier_wait_seconds_count (\d+)$/m.exec(body)?.[1] ?? -1);
-  }
+describe('passcode', () => {
+  it('keeps out a joiner without it and lets in one with it', () => {
+    const { code, host } = pair({ passcode: 'hunter2' });
 
-  it('records the wait when the last peer readies', async () => {
-    const before = await barriersRecorded();
+    const stranger = connect();
+    stranger.receive({ type: 'join-room', code, displayName: 'Ada' });
+    assert.equal(stranger.last('error').code, 'passcode-required');
+    assert.equal(host.last('room-state').peers.length, 2, 'still just the two');
+
+    // The same socket may try again: asking was not a strike.
+    stranger.receive({ type: 'join-room', code, displayName: 'Ada', passcode: 'hunter2' });
+    assert.equal(stranger.last('room-joined').code, code);
+  });
+
+  it('hangs up on a socket that keeps guessing', () => {
+    const { code } = pair({ passcode: 'hunter2' });
+    const guesser = connect();
+
+    for (let i = 0; i < 4; i++) {
+      guesser.receive({ type: 'join-room', code, displayName: 'Ada', passcode: `guess${i}` });
+    }
+    assert.equal(guesser.closed, false, 'a few typos are forgiven');
+
+    guesser.receive({ type: 'join-room', code, displayName: 'Ada', passcode: 'guess4' });
+    assert.equal(guesser.closed, true);
+  });
+});
+
+describe('the room list', () => {
+  it('reaches a watcher at once, and again whenever a room changes', () => {
+    const watcher = connect();
+    watcher.receive({ type: 'watch-rooms' });
+    assert.deepEqual(watcher.last('room-list').rooms, []);
+
     const { host, guest } = pair();
-    guest.receive({ type: 'ready' });
+    assert.equal(watcher.last('room-list').rooms[0]?.memberCount, 2);
 
-    assert.equal(await barriersRecorded(), before + 1);
-    host.hangUp();
+    host.receive({ type: 'now-playing', title: 'track.mp3' });
+    assert.equal(watcher.last('room-list').rooms[0]?.nowPlaying, 'track.mp3');
+
     guest.hangUp();
+    assert.equal(watcher.last('room-list').rooms[0]?.memberCount, 1);
+
+    host.hangUp();
+    assert.deepEqual(watcher.last('room-list').rooms, []);
   });
 
-  it('records the wait when the last unready peer leaves instead', async () => {
-    // The survivors are all ready and nobody will send another `ready`, so
-    // the leave path is the only place left to notice the barrier closed.
-    const before = await barriersRecorded();
-    const { host, guest, code } = pair();
+  it('stops going to a watcher who has left the homepage', () => {
+    const watcher = connect();
+    watcher.receive({ type: 'watch-rooms' });
+    watcher.hangUp();
+    const before = watcher.sent.length;
 
-    const other = connect();
-    other.receive({ type: 'join-room', code, displayName: 'Alex' });
-    guest.receive({ type: 'ready' });
-    assert.equal(await barriersRecorded(), before, 'not all ready yet');
-
-    other.hangUp();
-
-    assert.equal(await barriersRecorded(), before + 1);
-    host.hangUp();
-    guest.hangUp();
+    pair();
+    assert.equal(watcher.sent.length, before);
   });
 
-  it('reopens the barrier when someone joins after it settled', async () => {
-    // A settled room that gains an unready peer is waiting again, and that
-    // second wait has to be recorded too.
-    const { host, guest, code } = pair();
-    guest.receive({ type: 'ready' });
-    const afterFirst = await barriersRecorded();
-
-    const other = connect();
-    other.receive({ type: 'join-room', code, displayName: 'Alex' });
-    other.receive({ type: 'ready' });
-
-    assert.equal(await barriersRecorded(), afterFirst + 1);
-    host.hangUp();
-    guest.hangUp();
-    other.hangUp();
+  it('is not sent to people who never asked', () => {
+    const { host } = pair();
+    assert.equal(host.sent.some((m) => m.type === 'room-list'), false);
   });
 });

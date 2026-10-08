@@ -14,6 +14,11 @@ export interface DecodedTrack {
 
 /** Must be called synchronously from a user gesture handler. */
 export async function armAudio(ctx: AudioContext): Promise<void> {
+  // iOS files a page that only uses Web Audio under "ambient" sound, which
+  // the lock screen and the ringer switch both silence. "playback" is the
+  // category a music app has. Safari 16.4+; nothing to do elsewhere.
+  const session = (navigator as { audioSession?: { type: string } }).audioSession;
+  if (session) session.type = 'playback';
   if (ctx.state !== 'running') await ctx.resume();
   // Resuming is not enough on iOS: a source has to actually have played.
   const silence = ctx.createBufferSource();

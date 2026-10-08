@@ -2,41 +2,17 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import type { ClientMessage, ServerMessage } from '@rave/protocol';
 import { RoomHub, type Outcome } from './hub.ts';
-import { Metrics } from './metrics.ts';
 import { RoomRegistry } from './rooms.ts';
 
 /**
- * The hub's own rule: a roster change reaches the whole room and moves the
- * barrier timer, on every path, without the path having to say so. No socket
- * anywhere — what comes out is who must hear what.
+ * The hub's own rule: a roster change reaches the whole room and marks the
+ * room list stale, on every path, without the path having to say so. No
+ * socket anywhere — what comes out is who must hear what.
  */
 
-function hub() {
-  const rooms = new RoomRegistry();
-  const metrics = new Metrics(rooms);
-  let t = 0;
-  const built = new RoomHub({ rooms, metrics, now: () => t });
-  return {
-    hub: built,
-    advance: (ms: number) => {
-      t += ms;
-    },
-    /** How many barriers were recorded, and their total wait. */
-    async barrier(): Promise<{ count: number; sum: number }> {
-      const { body } = await metrics.render();
-      const read = (suffix: string) =>
-        Number(new RegExp(`^rave_barrier_wait_seconds_${suffix} (\\S+)$`, 'm').exec(body)?.[1]);
-      return { count: read('count'), sum: read('sum') };
-    },
-  };
-}
+const hub = () => new RoomHub({ rooms: new RoomRegistry() });
 
-const create: ClientMessage = {
-  type: 'create-room',
-  roomName: 'Kitchen',
-  displayName: 'Keyur',
-  durationSeconds: 10,
-};
+const create = { type: 'create-room', roomName: 'Kitchen', displayName: 'Keyur' } as const;
 
 /** Who was sent a message of this type. */
 function heard(outcome: Outcome, type: ServerMessage['type']): string[] {
@@ -44,18 +20,22 @@ function heard(outcome: Outcome, type: ServerMessage['type']): string[] {
 }
 
 /** A creator and one joiner. */
-function pair(h: RoomHub) {
-  const created = h.handle(undefined, create);
+function pair(h: RoomHub, extra: Partial<Extract<ClientMessage, { type: 'create-room' }>> = {}) {
+  const created = h.handle(undefined, { ...create, ...extra });
   const hostId = created.identity!;
   const code = (created.reply[0] as Extract<ServerMessage, { type: 'room-created' }>).code;
-  const joined = h.handle(undefined, { type: 'join-room', code, displayName: 'Sam' });
+  const joined = h.handle(undefined, {
+    type: 'join-room',
+    code,
+    displayName: 'Sam',
+    passcode: extra.passcode,
+  });
   return { hostId, guestId: joined.identity!, code, joined };
 }
 
 describe('RoomHub', () => {
   it('gives a creator an identity, then the roster', () => {
-    const { hub: h } = hub();
-    const outcome = h.handle(undefined, create);
+    const outcome = hub().handle(undefined, create);
 
     assert.ok(outcome.identity);
     assert.equal(outcome.reply[0]?.type, 'room-created');
@@ -63,15 +43,14 @@ describe('RoomHub', () => {
   });
 
   it('tells the whole room about a join, the joiner included', () => {
-    const { hub: h } = hub();
-    const { hostId, guestId, joined } = pair(h);
+    const { hostId, guestId, joined } = pair(hub());
 
     assert.equal(joined.reply[0]?.type, 'room-joined');
     assert.deepEqual(heard(joined, 'room-state').sort(), [hostId, guestId].sort());
   });
 
   it('refuses a second room on a connection that already has one', () => {
-    const { hub: h } = hub();
+    const h = hub();
     const { hostId } = pair(h);
     const outcome = h.handle(hostId, create);
 
@@ -81,7 +60,7 @@ describe('RoomHub', () => {
   });
 
   it('addresses a relayed signal to its target alone, stamped with the sender', () => {
-    const { hub: h } = hub();
+    const h = hub();
     const { hostId, guestId } = pair(h);
     const outcome = h.handle(hostId, { type: 'signal', to: guestId, data: { sdp: 'x' } });
 
@@ -90,18 +69,8 @@ describe('RoomHub', () => {
     ]);
   });
 
-  it('drops the excluded on a forced start and tells only the survivors the roster', () => {
-    const { hub: h } = hub();
-    const { hostId, guestId } = pair(h);
-    const outcome = h.handle(hostId, { type: 'start-playback', force: true });
-
-    assert.deepEqual(heard(outcome, 'room-closed'), [guestId]);
-    assert.deepEqual(heard(outcome, 'room-state'), [hostId]);
-    assert.deepEqual(outcome.dropped, [guestId]);
-  });
-
   it('tells the survivors why the room ended when the creator leaves', () => {
-    const { hub: h } = hub();
+    const h = hub();
     const { hostId, guestId } = pair(h);
     const outcome = h.leave(hostId);
 
@@ -111,42 +80,90 @@ describe('RoomHub', () => {
   });
 
   it('says nothing when someone in no room leaves', () => {
-    const { hub: h } = hub();
-    assert.deepEqual(h.leave('nobody').deliveries, []);
+    assert.deepEqual(hub().leave('nobody').deliveries, []);
   });
 });
 
-describe('the barrier, as a consequence of the roster', () => {
-  it('times from the last arrival to the last ready', async () => {
+describe('joining with a passcode', () => {
+  it('refuses, giving no identity, and says which way it was wrong', () => {
     const h = hub();
-    const { guestId } = pair(h.hub);
-    h.advance(4_000);
-    h.hub.handle(guestId, { type: 'ready' });
+    const { code } = pair(h, { passcode: 'hunter2' });
 
-    assert.deepEqual(await h.barrier(), { count: 1, sum: 4 });
+    const none = h.handle(undefined, { type: 'join-room', code, displayName: 'Ada' });
+    const wrong = h.handle(undefined, { type: 'join-room', code, displayName: 'Ada', passcode: 'nope' });
+
+    for (const [outcome, reason] of [[none, 'passcode-required'], [wrong, 'passcode-wrong']] as const) {
+      assert.equal(outcome.identity, undefined);
+      assert.deepEqual(outcome.deliveries, [], 'the room hears nothing of a failed attempt');
+      assert.equal((outcome.reply[0] as Extract<ServerMessage, { type: 'error' }>).code, reason);
+    }
+  });
+});
+
+describe('kick', () => {
+  it('tells the kicked why, drops them, and gives the rest a roster without them', () => {
+    const h = hub();
+    const { hostId, guestId } = pair(h);
+    const outcome = h.handle(hostId, { type: 'kick', peerId: guestId });
+
+    assert.deepEqual(heard(outcome, 'room-closed'), [guestId]);
+    assert.equal(
+      (outcome.deliveries[0]!.msg as Extract<ServerMessage, { type: 'room-closed' }>).reason,
+      'kicked',
+    );
+    assert.deepEqual(heard(outcome, 'room-state'), [hostId]);
+    assert.deepEqual(outcome.dropped, [guestId]);
   });
 
-  it('settles when the last unready peer leaves instead', async () => {
+  it('refuses anyone but the creator', () => {
     const h = hub();
-    const { guestId, code } = pair(h.hub);
-    const other = h.hub.handle(undefined, { type: 'join-room', code, displayName: 'Ada' });
-    h.hub.handle(guestId, { type: 'ready' });
-    assert.equal((await h.barrier()).count, 0, 'not all ready yet');
+    const { hostId, guestId } = pair(h);
+    const outcome = h.handle(guestId, { type: 'kick', peerId: hostId });
 
-    h.advance(2_000);
-    h.hub.leave(other.identity!);
+    assert.equal((outcome.reply[0] as Extract<ServerMessage, { type: 'error' }>).code, 'not-creator');
+    assert.deepEqual(outcome.dropped, []);
+  });
+});
 
-    assert.deepEqual(await h.barrier(), { count: 1, sum: 2 });
+describe('the room list, as a consequence of the roster', () => {
+  it('goes to whoever asks to watch', () => {
+    const h = hub();
+    pair(h);
+    const outcome = h.handle(undefined, { type: 'watch-rooms' });
+
+    assert.equal(outcome.watch, true);
+    const list = outcome.reply[0] as Extract<ServerMessage, { type: 'room-list' }>;
+    assert.equal(list.rooms[0]?.memberCount, 2);
   });
 
-  it('records nothing for a room that was force-started past the barrier', async () => {
+  it('is stale after every change to who is in a room', () => {
     const h = hub();
-    const { hostId, code } = pair(h.hub);
-    h.hub.handle(hostId, { type: 'start-playback', force: true });
+    const created = h.handle(undefined, create);
+    const { hostId, guestId, joined } = pair(h);
 
-    // Locked with only the creator left: every later change is a no-op here.
-    const late = h.hub.handle(undefined, { type: 'join-room', code, displayName: 'Late' });
-    assert.equal(late.reply[0]?.type, 'error');
-    assert.equal((await h.barrier()).count, 0);
+    assert.equal(created.listChanged, true, 'a room appeared');
+    assert.equal(joined.listChanged, true, 'a head count moved');
+    assert.equal(h.handle(hostId, { type: 'kick', peerId: guestId }).listChanged, true);
+    assert.equal(h.leave(hostId).listChanged, true, 'a room went away');
+  });
+
+  it('is stale when the creator says what is playing, and only the creator', () => {
+    const h = hub();
+    const { hostId, guestId } = pair(h);
+
+    assert.equal(h.handle(hostId, { type: 'now-playing', title: 'track.mp3' }).listChanged, true);
+    assert.equal(h.list().rooms[0]?.nowPlaying, 'track.mp3');
+    assert.equal(h.handle(guestId, { type: 'now-playing', title: 'mine.mp3' }).listChanged, undefined);
+    assert.equal(h.list().rooms[0]?.nowPlaying, 'track.mp3');
+  });
+
+  it('is not stale for a relayed signal or a refused join', () => {
+    const h = hub();
+    const { hostId, guestId } = pair(h);
+    assert.equal(h.handle(hostId, { type: 'signal', to: guestId, data: {} }).listChanged, undefined);
+    assert.equal(
+      h.handle(undefined, { type: 'join-room', code: 'ZZZZZZ', displayName: 'Ada' }).listChanged,
+      undefined,
+    );
   });
 });

@@ -79,26 +79,36 @@ export type DisplayName = z.infer<typeof DisplayName>;
 export const RoomName = z.string().trim().min(1).max(64);
 export type RoomName = z.infer<typeof RoomName>;
 
+/** What the room is for, as the room list shows it. Optional, so it may be empty. */
+export const Description = z.string().trim().max(200);
+export type Description = z.infer<typeof Description>;
+
+/**
+ * The creator's gate on a room. Bounded below so it is not a single key
+ * press, and above because it is compared byte for byte on every join.
+ */
+export const Passcode = z.string().min(4).max(32);
+export type Passcode = z.infer<typeof Passcode>;
+
 /** A peer as everyone in the room sees them. */
 export const Peer = z.object({
   peerId: z.uuid(),
   displayName: DisplayName,
   isCreator: z.boolean(),
-  /** True once this peer holds the fully decoded file. The creator starts true. */
-  ready: z.boolean(),
 });
 export type Peer = z.infer<typeof Peer>;
 
 /**
- * Client -> server. Sent only after the creator's browser has decoded the
- * file: the room must not exist until playback is known to be possible.
+ * Client -> server. A room starts empty: the creator adds tracks once they
+ * are inside it, so there is nothing about audio here.
  */
 export const CreateRoom = z.object({
   type: z.literal('create-room'),
   roomName: RoomName,
+  description: Description.optional(),
   displayName: DisplayName,
-  /** Track duration in seconds, from the decoded buffer. Display only. */
-  durationSeconds: z.number().positive().finite(),
+  /** Absent means anyone who can see the room can join it. */
+  passcode: Passcode.optional(),
 });
 export type CreateRoom = z.infer<typeof CreateRoom>;
 
@@ -110,41 +120,36 @@ export const JoinRoom = z.object({
   type: z.literal('join-room'),
   code: RoomCode,
   displayName: DisplayName,
+  /**
+   * Looser than {@link Passcode} on purpose: a guess that is too short is a
+   * wrong passcode, and should be told so rather than fail to parse.
+   */
+  passcode: z.string().max(32).optional(),
 });
 export type JoinRoom = z.infer<typeof JoinRoom>;
 
-/**
- * Client -> server. "I hold the whole file and it decoded."
- *
- * No payload: readiness is a fact about the sender's own device, and the
- * server already knows which socket sent this. A peerId field would be a
- * claim someone could make about somebody else.
- */
-export const Ready = z
-  .object({
-    type: z.literal('ready'),
-  })
-  // Strict, unlike the rest: zod would otherwise strip an extra peerId and
-  // parse this happily, which reads as accepting a claim we then ignore.
-  .strict();
-export type Ready = z.infer<typeof Ready>;
+/** Client -> server. From the homepage: send me the room list, and keep it current. */
+export const WatchRooms = z.object({ type: z.literal('watch-rooms') });
+export type WatchRooms = z.infer<typeof WatchRooms>;
+
+/** Client -> server. The creator removes a member. They may join again. */
+export const Kick = z.object({
+  type: z.literal('kick'),
+  peerId: z.uuid(),
+});
+export type Kick = z.infer<typeof Kick>;
 
 /**
- * Client -> server. The creator says go.
+ * Client -> server. The creator says what the room list should show.
  *
- * `force` is the answer to "someone is stuck": without it the server refuses
- * unless every peer is ready, with it the not-ready peers are dropped from
- * the room. It is explicit rather than inferred from the roster because a
- * force-start is a decision a person makes at a dialog, and a server that
- * guessed it would exclude someone on a roster that was merely a tick stale.
+ * The server sees no playback at all — cues travel peer to peer — so this is
+ * the only way it can know. Display only; null when nothing is playing.
  */
-export const StartPlayback = z
-  .object({
-    type: z.literal('start-playback'),
-    force: z.boolean(),
-  })
-  .strict();
-export type StartPlayback = z.infer<typeof StartPlayback>;
+export const NowPlaying = z.object({
+  type: z.literal('now-playing'),
+  title: z.string().trim().max(200).nullable(),
+});
+export type NowPlaying = z.infer<typeof NowPlaying>;
 
 /**
  * Client -> server, then server -> client, relayed to one named peer.
@@ -185,10 +190,28 @@ export const RoomState = z.object({
   type: z.literal('room-state'),
   code: RoomCode,
   roomName: RoomName,
+  description: Description,
   peers: z.array(Peer),
-  locked: z.boolean(),
 });
 export type RoomState = z.infer<typeof RoomState>;
+
+/** A room as the homepage lists it. Never carries the passcode, only that there is one. */
+export const RoomSummary = z.object({
+  code: RoomCode,
+  roomName: RoomName,
+  description: Description,
+  memberCount: z.number().int().nonnegative(),
+  hasPasscode: z.boolean(),
+  nowPlaying: z.string().nullable(),
+});
+export type RoomSummary = z.infer<typeof RoomSummary>;
+
+/** Server -> client. Every live room, resent to watchers whenever it changes. */
+export const RoomList = z.object({
+  type: z.literal('room-list'),
+  rooms: z.array(RoomSummary),
+});
+export type RoomList = z.infer<typeof RoomList>;
 
 /**
  * Server -> client. The joiner's own peerId, which the roster alone cannot
@@ -208,15 +231,14 @@ export type RoomJoined = z.infer<typeof RoomJoined>;
  * final, so the UI can say what happened instead of leaving a roster frozen
  * on screen.
  *
- * 'excluded' is the odd one out: the room is still playing, just not for
- * them. Same message because the consequence is identical — there is nothing
- * left on screen worth keeping live — and a separate one would be a second
- * terminal path for the client to get wrong.
+ * 'kicked' is the odd one out: the room carries on, just not for them. Same
+ * message because the consequence is identical — there is nothing left on
+ * screen worth keeping live.
  */
 export const RoomClosed = z.object({
   type: z.literal('room-closed'),
   code: RoomCode,
-  reason: z.enum(['creator-left', 'room-empty', 'excluded']),
+  reason: z.enum(['creator-left', 'room-empty', 'kicked']),
 });
 export type RoomClosed = z.infer<typeof RoomClosed>;
 
@@ -225,11 +247,11 @@ export const ErrorMessage = z.object({
   type: z.literal('error'),
   code: z.enum([
     'room-not-found',
-    'room-locked',
     'invalid-request',
     'peer-not-found',
     'not-creator',
-    'peers-not-ready',
+    'passcode-required',
+    'passcode-wrong',
   ]),
   message: z.string().min(1).max(200),
 });
@@ -240,8 +262,9 @@ export const ClientMessage = z.discriminatedUnion('type', [
   CreateRoom,
   JoinRoom,
   Signal,
-  Ready,
-  StartPlayback,
+  WatchRooms,
+  Kick,
+  NowPlaying,
 ]);
 export type ClientMessage = z.infer<typeof ClientMessage>;
 
@@ -251,6 +274,7 @@ export const ServerMessage = z.discriminatedUnion('type', [
   RoomCreated,
   RoomJoined,
   RoomState,
+  RoomList,
   RoomClosed,
   SignalFrom,
   ErrorMessage,

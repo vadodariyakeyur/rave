@@ -12,7 +12,7 @@ const settle = async () => {
   for (let i = 0; i < 50; i++) await new Promise((r) => setTimeout(r, 0));
 };
 
-const file = { bytes: bytes(40_000), fileName: 'track.mp3' };
+const file = { trackId: 't1', bytes: bytes(40_000), fileName: 'track.mp3' };
 
 describe('ChannelLink', () => {
   it('hears a message subscribed to before the channel existed', () => {
@@ -22,9 +22,9 @@ describe('ChannelLink', () => {
 
     const wire = channel();
     made.attach(wire);
-    wire.deliver(JSON.stringify({ type: 'play', startAt: 7, fromSeconds: 0 }));
+    wire.deliver(JSON.stringify({ type: 'play', trackId: 't1', startAt: 7, fromSeconds: 0 }));
 
-    assert.deepEqual(heard, [{ type: 'play', startAt: 7, fromSeconds: 0 }]);
+    assert.deepEqual(heard, [{ type: 'play', trackId: 't1', startAt: 7, fromSeconds: 0 }]);
   });
 
   it('gives each kind of message only to those who asked for it', () => {
@@ -102,22 +102,24 @@ describe('ChannelLink', () => {
     await assert.rejects(leaving.opened(), 'and stays closed');
   });
 
-  it('carries a file alongside everything else on the wire', async () => {
+  it('carries files, one after another, alongside everything else on the wire', async () => {
     // The clock keeps probing while the file is in flight. Neither may
     // mistake the other's traffic for its own.
     const { a, b } = linked();
     const pings: unknown[] = [];
     b.link.on('clock-ping', (m) => pings.push(m));
 
-    const receiving = b.link.receiveFile();
+    const got: { fileName: string; bytes: ArrayBuffer }[] = [];
+    void b.link.receiveFiles((incoming) => got.push(incoming)).catch(() => {});
     await settle();
     const sending = a.link.sendFile(file);
     a.link.send({ type: 'clock-ping', id: 1, t0: 0 });
     await sending;
-    const got = await receiving;
+    // And the next one straight behind it, with no pause to re-listen in.
+    await a.link.sendFile({ ...file, trackId: 't2', fileName: 'next.mp3' });
 
-    assert.equal(got.fileName, 'track.mp3');
-    assert.deepEqual(new Uint8Array(got.bytes), new Uint8Array(file.bytes));
+    assert.deepEqual(got.map((f) => f.fileName), ['track.mp3', 'next.mp3']);
+    assert.deepEqual(new Uint8Array(got[0]!.bytes), new Uint8Array(file.bytes));
     assert.equal(pings.length, 1);
   });
 

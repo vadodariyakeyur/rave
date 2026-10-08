@@ -21,6 +21,8 @@ function send(socket: WebSocket, msg: ServerMessage): void {
   if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(msg));
 }
 
+const MAX_WRONG_PASSCODES = 5;
+
 /** A connection handler over one hub, with its own socket table. */
 export function connectionHandler(hub: RoomHub): (socket: WebSocket) => void {
   /**
@@ -29,6 +31,9 @@ export function connectionHandler(hub: RoomHub): (socket: WebSocket) => void {
    * lives here rather than on Room.
    */
   const socketByPeer = new Map<string, WebSocket>();
+
+  /** Sockets on the homepage, which get the room list whenever it changes. */
+  const watchers = new Set<WebSocket>();
 
   function deliver(socket: WebSocket, outcome: Outcome): void {
     for (const msg of outcome.reply) send(socket, msg);
@@ -42,6 +47,11 @@ export function connectionHandler(hub: RoomHub): (socket: WebSocket) => void {
       // Leaving it open holds a socket per dropped peer until they happen to
       // close the tab.
       target?.close();
+    }
+    if (outcome.watch) watchers.add(socket);
+    if (outcome.listChanged) {
+      const list = hub.list();
+      for (const watcher of watchers) send(watcher, list);
     }
   }
 
@@ -64,6 +74,11 @@ export function connectionHandler(hub: RoomHub): (socket: WebSocket) => void {
     // Which peer this socket belongs to, once it has created or joined a room.
     let peerId: string | undefined;
 
+    // Guessing a passcode is the one thing here worth slowing down. A
+    // handful of tries covers a typo; past that the socket goes, and each
+    // reconnect costs the guesser a handshake.
+    let wrongPasscodes = 0;
+
     socket.on('message', (raw: Buffer) => {
       const msg = parseClientMessage(raw.toString());
       // Unparseable input is dropped, not trusted.
@@ -83,9 +98,13 @@ export function connectionHandler(hub: RoomHub): (socket: WebSocket) => void {
         socketByPeer.set(peerId, socket);
       }
       deliver(socket, outcome);
+
+      const wrong = outcome.reply.some((r) => r.type === 'error' && r.code === 'passcode-wrong');
+      if (wrong && ++wrongPasscodes >= MAX_WRONG_PASSCODES) socket.close();
     });
 
     socket.on('close', () => {
+      watchers.delete(socket);
       if (peerId === undefined) return;
       socketByPeer.delete(peerId);
       deliver(socket, hub.leave(peerId));

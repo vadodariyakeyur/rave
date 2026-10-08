@@ -1,6 +1,7 @@
 'use client';
 
 import { useId } from 'react';
+import { Headphones } from 'lucide-react';
 
 import { OFFSET_RANGE_MS } from '@/lib/offset';
 
@@ -26,10 +27,11 @@ export function OffsetSlider({
   return (
     <div className="space-y-2">
       <div className="flex items-baseline justify-between">
-        <label htmlFor={id} className="text-sm">
+        <label htmlFor={id} className="flex items-center gap-2 text-sm font-semibold">
+          <Headphones className="size-4" />
           My audio delay
         </label>
-        <span className="text-sm tabular-nums text-[var(--color-muted-foreground)]">
+        <span className="text-sm tabular-nums text-muted-foreground">
           {valueMs > 0 ? '+' : ''}
           {valueMs}ms
         </span>
@@ -42,9 +44,9 @@ export function OffsetSlider({
         step={10}
         value={valueMs}
         onChange={(event) => onChange(Number(event.target.value))}
-        className="w-full accent-[var(--color-primary)]"
+        className="w-full"
       />
-      <p className="text-xs text-[var(--color-muted-foreground)]">
+      <p className="text-xs text-muted-foreground">
         On Bluetooth headphones? Drag until this device sounds in time with the others.
       </p>
     </div>

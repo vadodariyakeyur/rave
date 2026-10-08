@@ -9,9 +9,9 @@ import qrcode from 'qrcode-generator';
  * second device is retyping a six-character code off someone else's screen.
  * This removes that step: scan, land on the pre-join screen, tap Join.
  *
- * Hidden once the room locks, because the link stops working at that point —
- * the server refuses joins after the creator starts, and a QR that leads to
- * "that room has already started playing" is worse than no QR.
+ * Shown for as long as the room is live: anyone can join at any point. When
+ * the room has a passcode the link carries it, so someone shown this screen
+ * is let straight in.
  */
 export function JoinQr({ url }: { url: string }) {
   const { path, size } = qrPath(url);
@@ -27,13 +27,13 @@ export function JoinQr({ url }: { url: string }) {
         // of physical target to lock focus, and a smaller code means the
         // scanner hunts. shape-rendering keeps module edges from blurring
         // into each other when the browser scales the grid up.
-        className="h-44 w-44 rounded-md bg-white p-2 [shape-rendering:crispEdges]"
+        className="size-44 rounded-lg bg-white p-3 [shape-rendering:crispEdges]"
         role="img"
         aria-label={`QR code to join this room at ${url}`}
       >
         <path d={path} fill="#000" />
       </svg>
-      <figcaption className="text-center text-xs text-[var(--color-muted-foreground)]">
+      <figcaption className="text-center text-xs text-muted-foreground">
         Scan to join
       </figcaption>
     </figure>

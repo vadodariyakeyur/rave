@@ -44,6 +44,19 @@ describe('armAudio', () => {
   });
 });
 
+describe('armAudio on iOS', () => {
+  it('asks for the playback audio session, so a locked phone keeps playing', async () => {
+    const session = { type: 'auto' };
+    Object.defineProperty(navigator, 'audioSession', { value: session, configurable: true });
+    try {
+      await armAudio(fakeContext().ctx as never);
+      assert.equal(session.type, 'playback');
+    } finally {
+      delete (navigator as { audioSession?: unknown }).audioSession;
+    }
+  });
+});
+
 describe('decodeBytes', () => {
   it('leaves the caller their bytes, because the creator still has to send them', async () => {
     // decodeAudioData detaches what it is handed. Handing it a copy is the

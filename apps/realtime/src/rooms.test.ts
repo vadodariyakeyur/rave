@@ -24,28 +24,26 @@ describe('generateRoomCode', () => {
 });
 
 describe('RoomRegistry', () => {
-  it('creates a room whose creator is present and ready', () => {
+  it('creates a room whose creator is present, with nothing playing', () => {
     const reg = new RoomRegistry();
     const room = reg.create({
       roomName: 'Kitchen',
-      displayName: 'Keyur',
-      durationSeconds: 100,
+      displayName: 'Keyur'
     });
 
     assert.equal(room.peers.length, 1);
     const creator = room.peers[0]!;
     assert.equal(creator.isCreator, true);
-    // The creator already holds the file — they chose it.
-    assert.equal(creator.ready, true);
-    assert.equal(room.locked, false);
+    // A room starts empty: tracks are added from inside it.
+    assert.equal(room.nowPlaying, null);
+    assert.equal(room.description, '');
   });
 
   it('issues a createdAt that is UTC ISO-8601', () => {
     const reg = new RoomRegistry();
     const room = reg.create({
       roomName: 'Kitchen',
-      displayName: 'Keyur',
-      durationSeconds: 100,
+      displayName: 'Keyur'
     });
     assert.match(room.createdAt, /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/);
   });
@@ -54,8 +52,7 @@ describe('RoomRegistry', () => {
     const reg = new RoomRegistry();
     const room = reg.create({
       roomName: 'Kitchen',
-      displayName: 'Keyur',
-      durationSeconds: 100,
+      displayName: 'Keyur'
     });
     assert.equal(reg.get(room.code)?.code, room.code);
   });
@@ -70,8 +67,7 @@ describe('RoomRegistry', () => {
     for (let i = 0; i < 300; i++) {
       const room = reg.create({
         roomName: `Room ${i}`,
-        displayName: 'Keyur',
-        durationSeconds: 100,
+        displayName: 'Keyur'
       });
       assert.equal(codes.has(room.code), false, `duplicate ${room.code}`);
       codes.add(room.code);
@@ -83,8 +79,7 @@ describe('RoomRegistry', () => {
     const reg = new RoomRegistry();
     const room = reg.create({
       roomName: 'Kitchen',
-      displayName: 'Keyur',
-      durationSeconds: 100,
+      displayName: 'Keyur'
     });
     const result = reg.removePeer(room.peers[0]!.peerId);
     // The reason is what the survivors are told, so it has to name the
@@ -97,8 +92,7 @@ describe('RoomRegistry', () => {
     const reg = new RoomRegistry();
     const room = reg.create({
       roomName: 'Kitchen',
-      displayName: 'Keyur',
-      durationSeconds: 100,
+      displayName: 'Keyur'
     });
     const peerId = room.peers[0]!.peerId;
     reg.removePeer(peerId);
@@ -107,9 +101,9 @@ describe('RoomRegistry', () => {
     assert.equal(reg.size, 0);
   });
 
-  it('adds a joiner as a non-creator who is not yet ready', () => {
+  it('adds a joiner as a non-creator', () => {
     const reg = new RoomRegistry();
-    const room = reg.create({ roomName: 'Kitchen', displayName: 'Keyur', durationSeconds: 100 });
+    const room = reg.create({ roomName: 'Kitchen', displayName: 'Keyur' });
 
     const joined = reg.join(room.code, 'Sam');
     assert.equal(joined.ok, true);
@@ -119,8 +113,6 @@ describe('RoomRegistry', () => {
     const peer = joined.room.peers.find((p) => p.peerId === joined.peerId)!;
     assert.equal(peer.displayName, 'Sam');
     assert.equal(peer.isCreator, false);
-    // Nothing has been transferred yet — ready is earned in #5, not on arrival.
-    assert.equal(peer.ready, false);
   });
 
   it('refuses a join for a code no room has', () => {
@@ -131,20 +123,9 @@ describe('RoomRegistry', () => {
     assert.equal(joined.reason, 'room-not-found');
   });
 
-  it('refuses a join once the room is locked', () => {
-    const reg = new RoomRegistry();
-    const room = reg.create({ roomName: 'Kitchen', displayName: 'Keyur', durationSeconds: 100 });
-    room.locked = true;
-
-    const joined = reg.join(room.code, 'Sam');
-    assert.equal(joined.ok, false);
-    if (joined.ok) return;
-    assert.equal(joined.reason, 'room-locked');
-  });
-
   it('keeps the room alive when a joiner leaves, and drops only them', () => {
     const reg = new RoomRegistry();
-    const room = reg.create({ roomName: 'Kitchen', displayName: 'Keyur', durationSeconds: 100 });
+    const room = reg.create({ roomName: 'Kitchen', displayName: 'Keyur' });
     const joined = reg.join(room.code, 'Sam');
     assert.ok(joined.ok);
 
@@ -158,7 +139,7 @@ describe('RoomRegistry', () => {
 
   it('closes the room out from under joiners when the creator leaves', () => {
     const reg = new RoomRegistry();
-    const room = reg.create({ roomName: 'Kitchen', displayName: 'Keyur', durationSeconds: 100 });
+    const room = reg.create({ roomName: 'Kitchen', displayName: 'Keyur' });
     const joined = reg.join(room.code, 'Sam');
     assert.ok(joined.ok);
 
@@ -175,7 +156,7 @@ describe('RoomRegistry', () => {
 
   it('reports an empty room as empty, not as the creator leaving', () => {
     const reg = new RoomRegistry();
-    const room = reg.create({ roomName: 'Kitchen', displayName: 'Keyur', durationSeconds: 100 });
+    const room = reg.create({ roomName: 'Kitchen', displayName: 'Keyur' });
     const joined = reg.join(room.code, 'Sam');
     assert.ok(joined.ok);
 
@@ -188,7 +169,7 @@ describe('RoomRegistry', () => {
 
   it('closes an emptied room when its last peer leaves', () => {
     const reg = new RoomRegistry();
-    const room = reg.create({ roomName: 'Kitchen', displayName: 'Keyur', durationSeconds: 100 });
+    const room = reg.create({ roomName: 'Kitchen', displayName: 'Keyur' });
     // A creator-less room cannot arise through join(), so build the state
     // directly: this is the branch that must not say 'creator-left'.
     room.peers = room.peers.map((p) => ({ ...p, isCreator: false }));
@@ -198,108 +179,115 @@ describe('RoomRegistry', () => {
   });
 });
 
-describe('setReady', () => {
-  it('flips a joiner to ready and reports the room it is in', () => {
-    const reg = new RoomRegistry();
-    const room = reg.create({ roomName: 'Kitchen', displayName: 'Keyur', durationSeconds: 100 });
-    const joined = reg.join(room.code, 'Ada');
-    assert.ok(joined.ok);
+describe('passcode', () => {
+  function locked() {
+    const registry = new RoomRegistry();
+    const room = registry.create({ roomName: 'Kitchen', displayName: 'Keyur', passcode: 'hunter2' });
+    return { registry, room };
+  }
 
-    const found = reg.setReady(joined.peerId);
-    assert.equal(found?.code, room.code);
-    assert.equal(found?.peers.find((p) => p.peerId === joined.peerId)?.ready, true);
+  it('asks for one when the room has it and the joiner sent none', () => {
+    const { registry, room } = locked();
+    assert.deepEqual(registry.join(room.code, 'Sam'), { ok: false, reason: 'passcode-required' });
   });
 
-  it('is unknown for a peer in no room, rather than throwing', () => {
-    // A ready can race a disconnect; the socket handler must be able to
-    // shrug rather than take the process down.
-    const reg = new RoomRegistry();
-    assert.equal(reg.setReady('11111111-1111-4111-8111-111111111111'), undefined);
+  it('refuses a wrong one, including one that is merely a prefix', () => {
+    const { registry, room } = locked();
+    for (const guess of ['nope', 'hunter', 'hunter22', '']) {
+      assert.deepEqual(registry.join(room.code, 'Sam', guess), { ok: false, reason: 'passcode-wrong' });
+    }
+    assert.equal(room.peers.length, 1, 'nobody got in');
+  });
+
+  it('lets the right one in', () => {
+    const { registry, room } = locked();
+    assert.equal(registry.join(room.code, 'Sam', 'hunter2').ok, true);
+  });
+
+  it('ignores a passcode offered to a room that has none', () => {
+    const registry = new RoomRegistry();
+    const room = registry.create({ roomName: 'Kitchen', displayName: 'Keyur' });
+    assert.equal(registry.join(room.code, 'Sam', 'whatever').ok, true);
+  });
+
+  it('says a room has one in the list, and never what it is', () => {
+    const { registry } = locked();
+    const [summary] = registry.list();
+    assert.equal(summary?.hasPasscode, true);
+    assert.equal(JSON.stringify(registry.list()).includes('hunter2'), false);
+    assert.equal(JSON.stringify(registry.toState(registry.get(summary!.code)!)).includes('hunter2'), false);
   });
 });
 
-describe('start', () => {
-  /** A room with a creator and two joiners, none of them ready yet. */
-  function room() {
-    const reg = new RoomRegistry();
-    const created = reg.create({ roomName: 'Kitchen', displayName: 'Keyur', durationSeconds: 100 });
-    const ada = reg.join(created.code, 'Ada');
-    const sam = reg.join(created.code, 'Sam');
-    assert.ok(ada.ok && sam.ok);
-    return { reg, created, ada: ada.peerId, sam: sam.peerId };
+describe('kick', () => {
+  function trio() {
+    const registry = new RoomRegistry();
+    const room = registry.create({ roomName: 'Kitchen', displayName: 'Keyur' });
+    const creatorId = room.peers[0]!.peerId;
+    const sam = registry.join(room.code, 'Sam');
+    const ada = registry.join(room.code, 'Ada');
+    assert.ok(sam.ok && ada.ok);
+    return { registry, room, creatorId, samId: sam.peerId, adaId: ada.peerId };
   }
 
-  it('locks the room and keeps everyone when all are ready', () => {
-    const { reg, created, ada, sam } = room();
-    reg.setReady(ada);
-    reg.setReady(sam);
-
-    const result = reg.start(created.peers[0]!.peerId, false);
-    assert.ok(result.ok);
-    assert.deepEqual(result.excluded, []);
-    assert.equal(result.room.locked, true);
-    assert.equal(result.room.peers.length, 3);
+  it('removes the member and leaves the rest', () => {
+    const { registry, room, creatorId, samId, adaId } = trio();
+    assert.equal(registry.kick(creatorId, samId).ok, true);
+    assert.deepEqual(room.peers.map((p) => p.peerId), [creatorId, adaId]);
+    assert.equal(registry.roomForPeer(samId), undefined);
   });
 
-  it('refuses without force while someone is still downloading', () => {
-    const { reg, created, ada } = room();
-    reg.setReady(ada);
-
-    const result = reg.start(created.peers[0]!.peerId, false);
-    assert.deepEqual(result, { ok: false, reason: 'peers-not-ready' });
-    // The refusal must not have half-started the room: a later join has to
-    // still work, or a creator who cancelled the dialog has a dead room.
-    assert.equal(created.locked, false);
-    assert.ok(reg.join(created.code, 'Late').ok);
+  it('is the creator\'s alone', () => {
+    const { registry, samId, adaId } = trio();
+    assert.deepEqual(registry.kick(samId, adaId), { ok: false, reason: 'not-creator' });
   });
 
-  it('drops the not-ready peers on a forced start and names them', () => {
-    const { reg, created, ada, sam } = room();
-    reg.setReady(ada);
-
-    const result = reg.start(created.peers[0]!.peerId, true);
-    assert.ok(result.ok);
-    assert.deepEqual(result.excluded.map((p) => p.peerId), [sam]);
-    assert.deepEqual(result.room.peers.map((p) => p.peerId).sort(), [created.peers[0]!.peerId, ada].sort());
-    // Out of the reverse index too, or their disconnect would later mutate
-    // a room they are no longer in.
-    assert.equal(reg.roomForPeer(sam), undefined);
+  it('cannot reach into another room, or remove the creator', () => {
+    const { registry, creatorId } = trio();
+    const other = trio();
+    assert.deepEqual(registry.kick(creatorId, other.samId), { ok: false, reason: 'peer-not-found' });
+    assert.deepEqual(registry.kick(creatorId, creatorId), { ok: false, reason: 'peer-not-found' });
   });
 
-  it('refuses a start from anyone but the creator', () => {
-    const { reg, ada } = room();
-    assert.deepEqual(reg.start(ada, true), { ok: false, reason: 'not-creator' });
+  it('remembers nothing: the kicked can join again', () => {
+    const { registry, room, creatorId, samId } = trio();
+    registry.kick(creatorId, samId);
+    assert.equal(registry.join(room.code, 'Sam').ok, true);
+  });
+});
+
+describe('the room list', () => {
+  it('shows each live room with its head count and what is playing', () => {
+    const registry = new RoomRegistry();
+    const room = registry.create({ roomName: 'Kitchen', displayName: 'Keyur', description: 'Friday' });
+    registry.join(room.code, 'Sam');
+    registry.setNowPlaying(room.peers[0]!.peerId, 'track.mp3');
+
+    assert.deepEqual(registry.list(), [
+      {
+        code: room.code,
+        roomName: 'Kitchen',
+        description: 'Friday',
+        memberCount: 2,
+        hasPasscode: false,
+        nowPlaying: 'track.mp3',
+      },
+    ]);
   });
 
-  it('refuses a start from a peer in no room', () => {
-    const reg = new RoomRegistry();
-    assert.deepEqual(reg.start('11111111-1111-4111-8111-111111111111', true), {
-      ok: false,
-      reason: 'invalid-request',
-    });
+  it('takes what is playing only from the creator', () => {
+    const registry = new RoomRegistry();
+    const room = registry.create({ roomName: 'Kitchen', displayName: 'Keyur' });
+    const sam = registry.join(room.code, 'Sam');
+    assert.ok(sam.ok);
+    assert.equal(registry.setNowPlaying(sam.peerId, 'mine.mp3'), undefined);
+    assert.equal(room.nowPlaying, null);
   });
 
-  it('shrugs at a second start rather than excluding a late joiner', () => {
-    // Locked already means playing. A double-tap on Play must not re-run the
-    // exclusion — by then the roster is the survivors, and re-running it on
-    // a room where someone reconnected not-ready would drop them twice.
-    const { reg, created, ada, sam } = room();
-    reg.setReady(ada);
-    reg.start(created.peers[0]!.peerId, true);
-
-    const again = reg.start(created.peers[0]!.peerId, false);
-    assert.ok(again.ok, 'a second start is not an error');
-    assert.deepEqual(again.excluded, []);
-    assert.equal(again.room.peers.length, 2);
-    assert.equal(again.room.peers.some((p) => p.peerId === sam), false);
-  });
-
-  it('closes the room to joins once started', () => {
-    const { reg, created, ada, sam } = room();
-    reg.setReady(ada);
-    reg.setReady(sam);
-    reg.start(created.peers[0]!.peerId, false);
-
-    assert.deepEqual(reg.join(created.code, 'Late'), { ok: false, reason: 'room-locked' });
+  it('drops a room when it closes', () => {
+    const registry = new RoomRegistry();
+    const room = registry.create({ roomName: 'Kitchen', displayName: 'Keyur' });
+    registry.removePeer(room.peers[0]!.peerId);
+    assert.deepEqual(registry.list(), []);
   });
 });

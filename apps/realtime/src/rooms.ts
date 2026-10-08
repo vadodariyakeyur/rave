@@ -1,4 +1,4 @@
-import { randomUUID, randomInt } from 'node:crypto';
+import { randomUUID, randomInt, timingSafeEqual } from 'node:crypto';
 import {
   ROOM_CODE_ALPHABET,
   ROOM_CODE_LENGTH,
@@ -6,6 +6,7 @@ import {
   type Peer,
   type RoomClosed,
   type RoomState,
+  type RoomSummary,
 } from '@rave/protocol';
 
 /**
@@ -21,32 +22,30 @@ export interface Room {
   roomName: string;
   /** UTC ISO-8601. For humans and logs; never used for scheduling. */
   createdAt: string;
-  durationSeconds: number;
+  description: string;
+  /** Held here and nowhere else: it is checked on join and never sent out. */
+  passcode?: string;
+  /** What the creator says is playing. Display only, for the room list. */
+  nowPlaying: string | null;
   peers: Peer[];
-  locked: boolean;
 }
 
 /**
- * Why a result and not an exception: both refusals are ordinary outcomes of
- * someone typing a code, and the reason maps straight onto a wire error code.
+ * Why a result and not an exception: every refusal is an ordinary outcome of
+ * someone typing a code or a passcode, and the reason maps straight onto a
+ * wire error code.
  */
 export type JoinResult =
   | { ok: true; room: Room; peerId: string }
-  | { ok: false; reason: Extract<ErrorMessage['code'], 'room-not-found' | 'room-locked'> };
-
-/**
- * Why a start was refused, or who it left behind.
- *
- * 'excluded' carries the peers dropped, not just their count: the server has
- * to close their sockets and the survivors need a roster without them, and
- * recomputing that list from a roster already mutated is not possible.
- */
-export type StartResult =
-  | { ok: true; room: Room; excluded: Peer[] }
   | {
       ok: false;
-      reason: Extract<ErrorMessage['code'], 'peers-not-ready' | 'not-creator' | 'invalid-request'>;
+      reason: Extract<ErrorMessage['code'], 'room-not-found' | 'passcode-required' | 'passcode-wrong'>;
     };
+
+/** Whether a kick took, and from which room. */
+export type KickResult =
+  | { ok: true; room: Room }
+  | { ok: false; reason: Extract<ErrorMessage['code'], 'not-creator' | 'peer-not-found'> };
 
 /** What became of the room after a peer left. */
 export type RemoveResult =
@@ -57,7 +56,8 @@ export type RemoveResult =
 export interface CreateRoomInput {
   roomName: string;
   displayName: string;
-  durationSeconds: number;
+  description?: string;
+  passcode?: string;
 }
 
 /** A room code with the ambiguous characters already excluded by the alphabet. */
@@ -92,17 +92,16 @@ export class RoomRegistry {
       peerId: randomUUID(),
       displayName: input.displayName,
       isCreator: true,
-      // The creator picked the file and decoded it before we got here.
-      ready: true,
     };
 
     const room: Room = {
       code: this.#uniqueCode(),
       roomName: input.roomName,
       createdAt: new Date().toISOString(),
-      durationSeconds: input.durationSeconds,
+      description: input.description ?? '',
+      passcode: input.passcode,
+      nowPlaying: null,
       peers: [creator],
-      locked: false,
     };
 
     this.#byCode.set(room.code, room);
@@ -110,20 +109,21 @@ export class RoomRegistry {
     return room;
   }
 
-  /** Add a peer to an existing, unlocked room. */
-  join(code: string, displayName: string): JoinResult {
+  /**
+   * Add a peer to a room, at any point in its life: there is no lock, and
+   * someone arriving mid-track starts in sync from wherever the room is.
+   */
+  join(code: string, displayName: string, passcode?: string): JoinResult {
     const room = this.#byCode.get(code);
     if (!room) return { ok: false, reason: 'room-not-found' };
-    // Locked means playback has started; a late joiner has no way to catch up.
-    if (room.locked) return { ok: false, reason: 'room-locked' };
+    if (room.passcode !== undefined) {
+      // Two refusals, because the screen does two different things: ask for
+      // one, or say the one it was given is wrong.
+      if (passcode === undefined) return { ok: false, reason: 'passcode-required' };
+      if (!samePasscode(room.passcode, passcode)) return { ok: false, reason: 'passcode-wrong' };
+    }
 
-    const peer: Peer = {
-      peerId: randomUUID(),
-      displayName,
-      isCreator: false,
-      // Ready is earned by holding the decoded file, which happens in #5.
-      ready: false,
-    };
+    const peer: Peer = { peerId: randomUUID(), displayName, isCreator: false };
     room.peers.push(peer);
     this.#roomCodeByPeer.set(peer.peerId, room.code);
     return { ok: true, room, peerId: peer.peerId };
@@ -139,46 +139,42 @@ export class RoomRegistry {
   }
 
   /**
-   * Mark a peer as holding the decoded file. Returns their room so the
-   * caller can rebroadcast the roster, or undefined if they are in none —
-   * a ready can race a disconnect, and that is not worth an exception.
+   * The creator removes a member. Only from the creator's own room, and
+   * never the creator themselves — that is leaving, and it ends the room.
+   *
+   * Nothing is remembered: a kicked member can join again.
    */
-  setReady(peerId: string): Room | undefined {
-    const room = this.roomForPeer(peerId);
-    const peer = room?.peers.find((p) => p.peerId === peerId);
-    if (!room || !peer) return undefined;
-    peer.ready = true;
+  kick(creatorId: string, peerId: string): KickResult {
+    const room = this.roomForPeer(creatorId);
+    if (!room?.peers.some((p) => p.peerId === creatorId && p.isCreator)) {
+      return { ok: false, reason: 'not-creator' };
+    }
+    if (peerId === creatorId || !room.peers.some((p) => p.peerId === peerId)) {
+      return { ok: false, reason: 'peer-not-found' };
+    }
+    room.peers = room.peers.filter((p) => p.peerId !== peerId);
+    this.#roomCodeByPeer.delete(peerId);
+    return { ok: true, room };
+  }
+
+  /** What the creator says is playing. Undefined if they are not a creator. */
+  setNowPlaying(creatorId: string, title: string | null): Room | undefined {
+    const room = this.roomForPeer(creatorId);
+    if (!room?.peers.some((p) => p.peerId === creatorId && p.isCreator)) return undefined;
+    room.nowPlaying = title;
     return room;
   }
 
-  /**
-   * Lock the room and, on a forced start, drop whoever is not ready.
-   *
-   * Locking here rather than in the caller is what makes it safe: the room
-   * is closed to joins in the same step that decides who is in it, so there
-   * is no window where someone joins between the check and the lock and is
-   * neither excluded nor ready.
-   *
-   * Starting an already-locked room is a no-op that still succeeds — a
-   * double-tap on Play is not an error anyone needs to see, and pause and
-   * resume in #8 run over a room that is already locked.
-   */
-  start(peerId: string, force: boolean): StartResult {
-    const room = this.roomForPeer(peerId);
-    const peer = room?.peers.find((p) => p.peerId === peerId);
-    if (!room || !peer) return { ok: false, reason: 'invalid-request' };
-    // Only the creator: they hold the file and the clock, so nobody else has
-    // anything to start.
-    if (!peer.isCreator) return { ok: false, reason: 'not-creator' };
-    if (room.locked) return { ok: true, room, excluded: [] };
-
-    const notReady = room.peers.filter((p) => !p.ready);
-    if (notReady.length > 0 && !force) return { ok: false, reason: 'peers-not-ready' };
-
-    for (const dropped of notReady) this.#roomCodeByPeer.delete(dropped.peerId);
-    room.peers = room.peers.filter((p) => p.ready);
-    room.locked = true;
-    return { ok: true, room, excluded: notReady };
+  /** Every live room, as the homepage lists it. */
+  list(): RoomSummary[] {
+    return [...this.#byCode.values()].map((room) => ({
+      code: room.code,
+      roomName: room.roomName,
+      description: room.description,
+      memberCount: room.peers.length,
+      hasPasscode: room.passcode !== undefined,
+      nowPlaying: room.nowPlaying,
+    }));
   }
 
   /**
@@ -211,8 +207,8 @@ export class RoomRegistry {
       type: 'room-state',
       code: room.code,
       roomName: room.roomName,
+      description: room.description,
       peers: room.peers,
-      locked: room.locked,
     };
   }
 
@@ -226,4 +222,11 @@ export class RoomRegistry {
     }
     throw new Error('exhausted room code attempts');
   }
+}
+
+/** Constant-time, so a wrong guess does not say how much of it was right. */
+function samePasscode(expected: string, given: string): boolean {
+  const a = Buffer.from(expected);
+  const b = Buffer.from(given);
+  return a.length === b.length && timingSafeEqual(a, b);
 }

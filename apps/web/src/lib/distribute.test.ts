@@ -5,106 +5,138 @@ import { send } from './transfer.ts';
 import { bytes, channel, FakeMesh, type FakeChannel } from './testing.ts';
 
 /**
- * Who has the file, and how far along. This is what the roster renders and
- * what the Play button reads, so its rules are the ones worth pinning:
- * every connected peer gets served, a peer that drops and comes back is
- * served again, and one peer failing never blocks another.
+ * The playlist, on its way from the creator to every member. The rules worth
+ * pinning: every track reaches every member, in order, one at a time; a track
+ * added later reaches people already here; a roster change never restarts a
+ * file in flight; and one member failing never holds up another.
  */
 
-/** Long enough for a multi-chunk send to run to completion. */
+/** Long enough for several multi-chunk sends to run to completion. */
 const settle = async () => {
-  for (let i = 0; i < 50; i++) await new Promise((r) => setTimeout(r, 0));
+  for (let i = 0; i < 80; i++) await new Promise((r) => setTimeout(r, 0));
 };
 
-const file = { bytes: bytes(40_000), fileName: 'track.mp3' };
+const track = (trackId: string, length = 40_000) => ({
+  trackId,
+  bytes: bytes(length),
+  fileName: `${trackId}.mp3`,
+});
+
+/** The track ids of the file headers a channel has carried, in order. */
+const headers = (wire: FakeChannel) =>
+  wire.messages().filter((m) => m.type === 'file-header').map((m) => m.trackId);
 
 describe('Distributor', () => {
-  it('sends the file to every peer whose channel is open', async () => {
+  it('sends every track to every member, in playlist order', async () => {
     const mesh = new FakeMesh();
-    const a = channel();
-    const b = channel();
-    const gotA = channel();
-    const gotB = channel();
-    a.peer = gotA;
-    b.peer = gotB;
-    mesh.link('a').attach(a);
-    mesh.link('b').attach(b);
+    const a = mesh.connect('a');
+    const b = mesh.connect('b');
 
-    const d = new Distributor(mesh, file);
+    const d = new Distributor(mesh);
+    d.setTracks([track('one'), track('two')]);
     d.sync(['a', 'b']);
     await settle();
 
-    assert.equal(d.transfers().get('a')?.state, 'sent');
-    assert.equal(d.transfers().get('b')?.state, 'sent');
-    assert.equal(d.transfers().get('a')?.progress, 1);
+    assert.deepEqual(headers(a), ['one', 'two']);
+    assert.deepEqual(headers(b), ['one', 'two']);
+    assert.deepEqual(d.transfers().get('a'), { progress: 1, state: 'sent' });
   });
 
-  it('never calls a peer ready on the strength of its own send', async () => {
-    // The barrier reads the server's ready flag, which only the peer sets
-    // after decoding. A sender that reported ready here would open the
-    // barrier on a device that received nothing — a channel can stay open
-    // while the peer is gone, and every byte then lands nowhere.
+  it('sends a track added later to members who are already here', async () => {
     const mesh = new FakeMesh();
-    const a = channel();
-    // No `.peer`: nothing is on the other end, yet the send completes.
-    mesh.link('a').attach(a);
-
-    const d = new Distributor(mesh, file);
+    const a = mesh.connect('a');
+    const d = new Distributor(mesh);
+    d.setTracks([track('one')]);
     d.sync(['a']);
     await settle();
 
-    assert.equal(d.transfers().get('a')?.progress, 1);
-    assert.notEqual(d.transfers().get('a')?.state, 'ready');
+    d.setTracks([track('one'), track('two')]);
+    assert.equal(d.transfers().get('a')?.state, 'downloading', 'there is more to send again');
+    await settle();
+
+    assert.deepEqual(headers(a), ['one', 'two'], 'and the first is not sent twice');
+    assert.equal(d.transfers().get('a')?.state, 'sent');
+  });
+
+  it('sends the whole playlist to someone who joins late', async () => {
+    const mesh = new FakeMesh();
+    const d = new Distributor(mesh);
+    d.setTracks([track('one'), track('two')]);
+    d.sync([]);
+
+    const late = mesh.connect('late');
+    d.sync(['late']);
+    await settle();
+
+    assert.deepEqual(headers(late), ['one', 'two']);
   });
 
   it('waits for a channel that is not open yet, then sends once it is', async () => {
-    // A peer's channel opens well after they appear in the roster. Sending
-    // once at sync time would simply skip them.
     const mesh = new FakeMesh();
-    const d = new Distributor(mesh, file);
+    const a = mesh.connect('a', 'connecting');
+    const d = new Distributor(mesh);
+    d.setTracks([track('one')]);
     d.sync(['a']);
     await settle();
-    assert.equal(d.transfers().get('a')?.state, 'downloading');
-    assert.equal(d.transfers().get('a')?.progress, 0);
+    assert.deepEqual(d.transfers().get('a'), { progress: 0, state: 'downloading' });
 
-    const a = channel();
-    a.peer = channel();
-    mesh.link('a').attach(a);
+    a.open();
     await settle();
-
     assert.equal(d.transfers().get('a')?.state, 'sent');
   });
 
-  it('sends to each peer exactly once while the transfer is in flight', async () => {
-    // sync runs on every roster change, and the mesh notifies constantly.
-    // Restarting a live transfer would corrupt the one already streaming.
+  it('never has two files on one channel at once, however often it is poked', async () => {
+    // sync runs on every roster change and setTracks on every playlist edit.
+    // A second file started mid-first would interleave into one buffer.
     const mesh = new FakeMesh();
-    const a = channel();
-    a.peer = channel();
-    mesh.link('a').attach(a);
-    let headers = 0;
-    (a.peer as FakeChannel).addEventListener('message', ((ev: { data: unknown }) => {
-      if (typeof ev.data === 'string' && ev.data.includes('file-header')) headers++;
-    }) as never);
-
-    const d = new Distributor(mesh, file);
+    const a = mesh.connect('a');
+    const d = new Distributor(mesh);
+    const tracks = [track('one', 200_000), track('two', 200_000)];
+    d.setTracks(tracks);
     d.sync(['a']);
+    d.sync(['a']);
+    d.setTracks(tracks);
+    d.setTracks(tracks);
+    await settle();
+
+    assert.deepEqual(headers(a), ['one', 'two']);
+  });
+
+  it('does not send a track that was removed before its turn', async () => {
+    const mesh = new FakeMesh();
+    const a = mesh.connect('a', 'connecting');
+    const d = new Distributor(mesh);
+    d.setTracks([track('one'), track('two'), track('three')]);
+    d.sync(['a']);
+    d.setTracks([track('one'), track('three')]);
+
+    a.open();
+    await settle();
+    assert.deepEqual(headers(a), ['one', 'three']);
+  });
+
+  it('counts progress across the whole playlist, by bytes', async () => {
+    const mesh = new FakeMesh();
+    const a = mesh.connect('a');
+    const d = new Distributor(mesh);
+    d.setTracks([track('small', 10_000)]);
     d.sync(['a']);
     await settle();
 
-    assert.equal(headers, 1);
+    // One of four equal parts is through; three more have just been added.
+    d.setTracks([track('small', 10_000), track('big', 30_000)]);
+    const { progress } = d.transfers().get('a')!;
+    assert.ok(progress >= 0.25 && progress < 1, `got ${progress}`);
   });
 
-  it('marks one peer stalled without touching the other', async () => {
-    // A failing peer must not hold up anyone else's download.
+  it('marks one member stalled without touching the other', async () => {
+    // A failing member must not hold up anyone else's download.
     const mesh = new FakeMesh();
-    const good = channel();
-    good.peer = channel();
-    const bad = channel('closed');
-    mesh.link('good').attach(good);
-    mesh.link('bad').attach(bad);
+    mesh.connect('good');
+    mesh.connect('bad', 'closed');
 
-    const d = new Distributor(mesh, file);
+    const d = new Distributor(mesh);
+    d.setTracks([track('one')]);
     d.sync(['good', 'bad']);
     await settle();
 
@@ -112,205 +144,138 @@ describe('Distributor', () => {
     assert.equal(d.transfers().get('bad')?.state, 'stalled');
   });
 
-  it('retries a peer that dropped, once they are back with a fresh channel', async () => {
-    // Rejoining is the fix a person will actually try. It has to work.
+  it('forgets a member who left', async () => {
     const mesh = new FakeMesh();
-    const broken = channel('closed');
-    mesh.link('a').attach(broken);
-
-    const d = new Distributor(mesh, file);
-    d.sync(['a']);
-    await settle();
-    assert.equal(d.transfers().get('a')?.state, 'stalled');
-
-    // They rejoin: gone from the roster, then back with a new channel.
-    d.sync([]);
-    const fresh = channel();
-    fresh.peer = channel();
-    mesh.link('a').attach(fresh);
-    d.sync(['a']);
-    await settle();
-
-    assert.equal(d.transfers().get('a')?.state, 'sent');
-  });
-
-  it('forgets a peer who left', async () => {
-    const mesh = new FakeMesh();
-    const a = channel();
-    a.peer = channel();
-    mesh.link('a').attach(a);
-    const d = new Distributor(mesh, file);
+    mesh.connect('a');
+    const d = new Distributor(mesh);
+    d.setTracks([track('one')]);
     d.sync(['a']);
     await settle();
 
     d.sync([]);
     assert.equal(d.transfers().get('a'), undefined);
+  });
+
+  it('has nothing to show while the playlist is empty', () => {
+    const mesh = new FakeMesh();
+    mesh.connect('a');
+    const d = new Distributor(mesh);
+    d.sync(['a']);
+    assert.equal(d.transfers().size, 0);
   });
 
   it('notifies subscribers as progress moves', async () => {
     const mesh = new FakeMesh();
-    const a = channel();
-    a.peer = channel();
-    mesh.link('a').attach(a);
-
-    const d = new Distributor(mesh, file);
+    mesh.connect('a');
+    const d = new Distributor(mesh);
     let notified = 0;
     d.subscribe(() => notified++);
+    d.setTracks([track('one')]);
     d.sync(['a']);
     await settle();
 
-    assert.ok(notified > 1, 'a single notify is not live progress');
+    assert.ok(notified > 2, 'a single notify is not live progress');
   });
 
   it('stops sending once closed', async () => {
     const mesh = new FakeMesh();
-    const d = new Distributor(mesh, file);
+    const a = mesh.connect('a');
+    const d = new Distributor(mesh);
     d.close();
 
-    const a = channel();
-    a.peer = channel();
-    mesh.link('a').attach(a);
+    d.setTracks([track('one')]);
     d.sync(['a']);
     await settle();
 
-    assert.equal(d.transfers().get('a'), undefined);
     assert.equal(a.sent.length, 0);
   });
 });
 
 describe('Receiver', () => {
-  const creator = 'creator-id';
-
-  /** A joiner's session surface: the context to decode into, and the socket. */
-  function fakeSession(decode?: () => Promise<unknown>) {
-    const sent: unknown[] = [];
-    return {
-      sent,
-      session: {
-        audioContext: {
-          decodeAudioData: decode ?? (async () => ({ duration: 30 })),
-        } as unknown as Pick<AudioContext, 'decodeAudioData'>,
-        signaling: { send: (msg: unknown) => sent.push(msg) },
-      },
-    };
+  /** A member's link to the creator, and the creator's end of it. */
+  function wired() {
+    const mesh = new FakeMesh();
+    const to = mesh.connect('creator');
+    const from = channel();
+    from.peer = to;
+    return { link: mesh.link('creator'), from, to };
   }
 
-  it('downloads from the creator, decodes, and reports ready', async () => {
-    const mesh = new FakeMesh();
-    const from = channel();
-    const to = channel();
-    from.peer = to;
-    mesh.link(creator).attach(to);
-    const { session, sent } = fakeSession();
-
-    const r = new Receiver(mesh.link(creator), session);
+  it('keeps each track as it arrives, encoded, by id', async () => {
+    const { link, from } = wired();
+    const r = new Receiver(link);
     r.start();
     await settle();
+    assert.deepEqual(r.download('one'), { state: 'waiting' });
 
-    await send(from, file);
+    await send(from, track('one'));
+    await send(from, track('two', 20_000));
     await settle();
 
-    assert.equal(r.transfer().state, 'ready');
-    assert.deepEqual(sent, [{ type: 'ready' }]);
-    assert.ok(r.result(), 'the decoded track is kept, not just announced');
+    assert.equal(r.bytes('one')?.byteLength, 40_000);
+    assert.equal(r.bytes('two')?.byteLength, 20_000);
+    assert.deepEqual(r.download('two'), { progress: 1, state: 'ready' });
+  });
+
+  it('reports how far along the track on the wire is', async () => {
+    const { link, from } = wired();
+    const r = new Receiver(link);
+    const seen: unknown[] = [];
+    r.subscribe(() => seen.push(r.download('one')));
+    r.start();
+    await settle();
+    await send(from, track('one'));
+    await settle();
+
+    assert.ok(seen.some((d) => (d as { state: string }).state === 'downloading'));
+    assert.deepEqual(seen.at(-1), { progress: 1, state: 'ready' });
   });
 
   it('waits for the creator channel to open rather than giving up', async () => {
     const mesh = new FakeMesh();
-    const { session } = fakeSession();
-    const r = new Receiver(mesh.link(creator), session);
+    const r = new Receiver(mesh.link('creator'));
     r.start();
     await settle();
-    assert.equal(r.transfer().state, 'downloading');
+    assert.equal(r.stalled(), false);
 
+    const to = mesh.connect('creator');
     const from = channel();
-    const to = channel();
     from.peer = to;
-    mesh.link(creator).attach(to);
     await settle();
-    await send(from, file);
+    await send(from, track('one'));
     await settle();
 
-    assert.equal(r.transfer().state, 'ready');
+    assert.equal(r.download('one').state, 'ready');
   });
 
-  it('is stalled, not ready, when the file arrives but will not decode', async () => {
-    // Received-but-undecoded is not ready: that device would be silent at
-    // playback, and the barrier must not clear on its behalf.
-    const mesh = new FakeMesh();
-    const from = channel();
-    const to = channel();
-    from.peer = to;
-    mesh.link(creator).attach(to);
-    const { session, sent } = fakeSession(async () => {
-      throw new DOMException('nope', 'EncodingError');
-    });
-
-    const r = new Receiver(mesh.link(creator), session);
+  it('lets go of tracks that are no longer in the playlist', async () => {
+    // A phone holding every track ever added runs out of memory.
+    const { link, from } = wired();
+    const r = new Receiver(link);
     r.start();
     await settle();
-    await send(from, file);
+    await send(from, track('one'));
+    await send(from, track('two'));
     await settle();
 
-    assert.equal(r.transfer().state, 'stalled');
-    assert.deepEqual(sent, [], 'a device that cannot play must never claim ready');
+    r.keep(['two']);
+
+    assert.equal(r.bytes('one'), undefined);
+    assert.ok(r.bytes('two'));
   });
 
-  it('is stalled when the creator drops mid-transfer', async () => {
-    const mesh = new FakeMesh();
-    const to = channel();
-    mesh.link(creator).attach(to);
-    const { session } = fakeSession();
-
-    const r = new Receiver(mesh.link(creator), session);
+  it('says so when the creator drops, and keeps what it already has', async () => {
+    const { link, from, to } = wired();
+    const r = new Receiver(link);
     r.start();
     await settle();
+    await send(from, track('one'));
+    await settle();
+
     to.close();
     await settle();
 
-    assert.equal(r.transfer().state, 'stalled');
-  });
-
-  it('has the track in hand before it tells the room it is ready', async () => {
-    // Ready invites the start cue. Whoever plays the track must already
-    // hold it when that goes out, or the cue beats the track it starts.
-    const mesh = new FakeMesh();
-    const from = channel();
-    const to = channel();
-    from.peer = to;
-    mesh.link(creator).attach(to);
-    const { session, sent } = fakeSession();
-
-    const r = new Receiver(mesh.link(creator), session);
-    let sentWhenTrackLanded: number | undefined;
-    r.subscribe(() => {
-      if (r.result() && sentWhenTrackLanded === undefined) sentWhenTrackLanded = sent.length;
-    });
-    r.start();
-    await settle();
-    await send(from, file);
-    await settle();
-
-    assert.equal(sentWhenTrackLanded, 0);
-    assert.deepEqual(sent, [{ type: 'ready' }]);
-  });
-
-  it('notifies subscribers as the download progresses', async () => {
-    const mesh = new FakeMesh();
-    const from = channel();
-    const to = channel();
-    from.peer = to;
-    mesh.link(creator).attach(to);
-    const { session } = fakeSession();
-
-    const r = new Receiver(mesh.link(creator), session);
-    let notified = 0;
-    r.subscribe(() => notified++);
-    r.start();
-    await settle();
-    await send(from, file);
-    await settle();
-
-    assert.ok(notified > 1, 'a single notify is not live progress');
+    assert.equal(r.stalled(), true);
+    assert.ok(r.bytes('one'));
   });
 });

@@ -4,9 +4,9 @@ import { createRoom, joinRoom, getRoom, setRoom } from './session.ts';
 import { FakeChannel } from './testing.ts';
 
 /**
- * The invariant this ticket exists for: a file that cannot be decoded must
- * never produce a room, because a room code issued for unplayable audio
- * strands everyone who joins it. Web Audio, WebSocket and WebRTC do not
+ * Entering a room: audio is armed on the tap, the handshake names us, and
+ * the room that comes out is the one this tab is in. Web Audio, WebSocket
+ * and WebRTC do not
  * exist in Node, so each is stubbed at the global the code actually reaches
  * for.
  */
@@ -94,10 +94,6 @@ class FakePeerConnection {
 /** Lets the arm + decode + connect chain settle before inspecting the socket. */
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-function fakeFile(name = 'track.mp3'): File {
-  return { name, arrayBuffer: async () => new ArrayBuffer(8) } as unknown as File;
-}
-
 const globals = globalThis as Record<string, unknown>;
 
 beforeEach(() => {
@@ -120,37 +116,24 @@ afterEach(() => {
 });
 
 describe('createRoom', () => {
-  it('does not open a socket when the file cannot be decoded', async () => {
-    decodeResult = () => {
-      throw new Error('bad file');
-    };
-
-    await assert.rejects(
-      createRoom({ roomName: 'Kitchen', displayName: 'Keyur', file: fakeFile('broken.bin') }),
-    );
-
-    // The whole point of the decode gate: no socket, so no room, so no code.
-    assert.equal(sockets.length, 0);
-    assert.equal(getRoom(), undefined);
-    assert.equal(contexts[0]?.closed, true);
-  });
-
-  it('sends create-room only after a successful decode, and keeps the decoded duration', async () => {
+  it('asks for an empty room, with its description and passcode, and enters it as creator', async () => {
     const pending = createRoom({
       roomName: 'Kitchen',
+      description: 'Friday',
       displayName: 'Keyur',
-      file: fakeFile(),
+      passcode: 'hunter2',
     });
     await flush();
 
     const socket = sockets[0];
-    assert.ok(socket, 'expected a socket once the decode succeeded');
+    assert.ok(socket, 'expected a socket once audio was armed');
     socket.emit('open');
     assert.deepEqual(JSON.parse(socket.sent[0]!), {
       type: 'create-room',
       roomName: 'Kitchen',
+      description: 'Friday',
       displayName: 'Keyur',
-      durationSeconds: 12.5,
+      passcode: 'hunter2',
     });
 
     socket.deliver({
@@ -163,10 +146,10 @@ describe('createRoom', () => {
       type: 'room-state',
       code: 'RW53NG',
       roomName: 'Kitchen',
-      locked: false,
+      description: 'Friday',
       peers: [
-        { peerId: OTHER, displayName: 'Someone else', isCreator: false, ready: false },
-        { peerId: CREATOR, displayName: 'Keyur', isCreator: true, ready: true },
+        { peerId: OTHER, displayName: 'Someone else', isCreator: false },
+        { peerId: CREATOR, displayName: 'Keyur', isCreator: true },
       ],
     });
 
@@ -175,12 +158,15 @@ describe('createRoom', () => {
     assert.equal(room.snapshot().selfPeerId, CREATOR);
     assert.equal(room.snapshot().isCreator, true);
     assert.equal(room.snapshot().code, 'RW53NG');
-    assert.deepEqual(room.snapshot().track, { fileName: 'track.mp3', durationSeconds: 12.5 });
+    // A room starts with nothing in it: tracks are added from inside.
+    assert.deepEqual(room.snapshot().playlist, []);
+    // Kept on this device so the share link can carry it.
+    assert.equal(room.snapshot().passcode, 'hunter2');
     assert.equal(getRoom(), room);
   });
 
   it('rejects and closes everything when the server refuses', async () => {
-    const pending = createRoom({ roomName: 'Kitchen', displayName: 'Keyur', file: fakeFile() });
+    const pending = createRoom({ roomName: 'Kitchen', displayName: 'Keyur' });
     await flush();
 
     const socket = sockets[0]!;
@@ -210,18 +196,18 @@ describe('joinRoom', () => {
       type: 'room-state',
       code: 'ABC234',
       roomName: 'Kitchen',
-      locked: false,
+      description: '',
       peers: [
-        { peerId: CREATOR, displayName: 'Keyur', isCreator: true, ready: true },
-        { peerId: OTHER, displayName: 'Sam', isCreator: false, ready: false },
+        { peerId: CREATOR, displayName: 'Keyur', isCreator: true },
+        { peerId: OTHER, displayName: 'Sam', isCreator: false },
       ],
     });
 
     const room = await promise;
     assert.equal(room.snapshot().selfPeerId, OTHER);
     assert.equal(room.snapshot().isCreator, false);
-    // The joiner has nothing to play yet; the file comes from the creator.
-    assert.equal(room.snapshot().track, undefined);
+    // Nothing to play yet; the playlist comes from the creator.
+    assert.deepEqual(room.snapshot().playlist, []);
     assert.equal(getRoom(), room);
   });
 
@@ -255,8 +241,8 @@ describe('joinRoom', () => {
       type: 'room-state',
       code,
       roomName: 'Kitchen',
-      locked: false,
-      peers: [{ peerId: OTHER, displayName: 'Sam', isCreator: false, ready: false }],
+      description: '',
+      peers: [{ peerId: OTHER, displayName: 'Sam', isCreator: false }],
     });
     const first = joinRoom({ code: 'ABC234', displayName: 'Sam' });
     await flush();

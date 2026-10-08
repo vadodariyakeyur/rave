@@ -37,36 +37,40 @@ export const STALL_MS = 15_000;
 export const CLOSED_ERROR = 'The connection closed before the file finished.';
 
 /**
- * What the roster renders for one peer's copy of the file.
+ * What the roster renders for one member's copy of the playlist.
  *
- * 'sent' is the sender's terminal state and deliberately not 'ready': handing
- * the last chunk to the channel says nothing about whether it arrived, let
- * alone decoded. Only the peer itself can claim ready, and it does that
- * through the server's `ready` flag. A sender that called this ready would
- * open the barrier on a device holding nothing.
+ * 'sent' is deliberately not 'ready': handing the last chunk to the channel
+ * says nothing about whether it arrived. It means the creator has nothing
+ * more to send them, which is all the creator can know.
  */
 export interface Transfer {
+  /** Bytes handed over, of all the bytes in the playlist. 0 to 1. */
   progress: number;
-  state: 'downloading' | 'sent' | 'ready' | 'stalled';
+  state: 'downloading' | 'sent' | 'stalled';
 }
 
 interface Header {
   type: 'file-header';
+  /** Which playlist track this is. A channel carries many, one after another. */
+  trackId: string;
   fileName: string;
   byteLength: number;
 }
 
 export interface Outgoing {
+  trackId: string;
   bytes: ArrayBuffer;
   fileName: string;
 }
 
 export interface Incoming {
+  trackId: string;
   bytes: ArrayBuffer;
   fileName: string;
 }
 
-type Progress = (fraction: number) => void;
+/** `trackId` is known on the receiving side only once the header has landed. */
+type Progress = (fraction: number, trackId: string) => void;
 
 /**
  * Send the file down one channel. Resolves when the last chunk is handed to
@@ -82,6 +86,7 @@ export async function send(
 ): Promise<void> {
   const header: Header = {
     type: 'file-header',
+    trackId: file.trackId,
     fileName: file.fileName,
     byteLength: file.bytes.byteLength,
   };
@@ -90,12 +95,12 @@ export async function send(
   for (let offset = 0; offset < file.bytes.byteLength; offset += CHUNK_BYTES) {
     await drain(channel);
     channel.send(file.bytes.slice(offset, offset + CHUNK_BYTES));
-    onProgress?.(Math.min(1, (offset + CHUNK_BYTES) / file.bytes.byteLength));
+    onProgress?.(Math.min(1, (offset + CHUNK_BYTES) / file.bytes.byteLength), file.trackId);
   }
 
   // A zero-byte file would otherwise never report anything, and the barrier
   // would wait on a transfer that already finished.
-  if (file.bytes.byteLength === 0) onProgress?.(1);
+  if (file.bytes.byteLength === 0) onProgress?.(1, file.trackId);
 }
 
 /**
@@ -133,65 +138,92 @@ function drain(channel: RTCDataChannel): Promise<void> {
 }
 
 /**
- * Listen for one file on this channel.
+ * Listen for every file on this channel, one after another, until it fails.
  *
- * Non-transfer traffic is ignored rather than rejected: #6 puts clock probes
- * on this same channel, and a receiver that throws on the first one would
+ * One listener for the channel's whole life rather than one per file: the
+ * next header can be right behind the last chunk, and a listener that had
+ * to be put back between them is a listener that can miss it.
+ *
+ * Non-transfer traffic is ignored rather than rejected: clock probes and
+ * cues share this channel, and a receiver that threw on the first one would
  * take the transfer down with it.
+ *
+ * `onError` is the end: the channel closed, or a sender overran its own
+ * header. Returns a detach.
  */
+export function listen(
+  channel: RTCDataChannel,
+  handlers: { onFile: (file: Incoming) => void; onProgress?: Progress; onError: (err: Error) => void },
+): () => void {
+  let header: Header | undefined;
+  let buffer: Uint8Array<ArrayBuffer> | undefined;
+  let filled = 0;
+
+  const detach = () => {
+    channel.removeEventListener('message', onMessage);
+    channel.removeEventListener('close', onClose);
+  };
+  const fail = (err: Error) => {
+    detach();
+    handlers.onError(err);
+  };
+  /** Hand the finished file on, and be ready for the next header. */
+  const deliver = (bytes: ArrayBuffer) => {
+    const { trackId, fileName } = header!;
+    header = undefined;
+    buffer = undefined;
+    handlers.onFile({ trackId, bytes, fileName });
+  };
+
+  const onClose = () => fail(new Error(CLOSED_ERROR));
+
+  const onMessage = (event: MessageEvent) => {
+    if (typeof event.data === 'string') {
+      const parsed = parseHeader(event.data);
+      if (!parsed) return; // Someone else's message on a shared channel.
+      header = parsed;
+      buffer = new Uint8Array(parsed.byteLength);
+      filled = 0;
+      if (parsed.byteLength === 0) {
+        handlers.onProgress?.(1, parsed.trackId);
+        deliver(new ArrayBuffer(0));
+      }
+      return;
+    }
+
+    // Bytes before a header are bytes we cannot place. Drop them rather
+    // than guessing at an offset.
+    if (!header || !buffer) return;
+
+    const chunk = new Uint8Array(event.data as ArrayBuffer);
+    // A sender that overruns its own header is a bug, not something to
+    // write past the end of the buffer for.
+    if (filled + chunk.byteLength > buffer.byteLength) {
+      return fail(new Error('The file arrived larger than it said it would be.'));
+    }
+    buffer.set(chunk, filled);
+    filled += chunk.byteLength;
+    handlers.onProgress?.(filled / buffer.byteLength, header.trackId);
+
+    if (filled === buffer.byteLength) deliver(buffer.buffer);
+  };
+
+  channel.addEventListener('message', onMessage);
+  channel.addEventListener('close', onClose);
+  return detach;
+}
+
+/** Listen for one file on this channel, and then stop. */
 export function receive(channel: RTCDataChannel, onProgress?: Progress): Promise<Incoming> {
   return new Promise((resolve, reject) => {
-    let header: Header | undefined;
-    let buffer: Uint8Array<ArrayBuffer> | undefined;
-    let filled = 0;
-
-    const finish = (fn: () => void) => {
-      channel.removeEventListener('message', onMessage);
-      channel.removeEventListener('close', onClose);
-      fn();
-    };
-
-    const onClose = () =>
-      finish(() => reject(new Error(CLOSED_ERROR)));
-
-    const onMessage = (event: MessageEvent) => {
-      if (typeof event.data === 'string') {
-        const parsed = parseHeader(event.data);
-        if (!parsed) return; // Someone else's message on a shared channel.
-        header = parsed;
-        buffer = new Uint8Array(parsed.byteLength);
-        filled = 0;
-        if (parsed.byteLength === 0) {
-          onProgress?.(1);
-          finish(() => resolve({ bytes: new ArrayBuffer(0), fileName: parsed.fileName }));
-        }
-        return;
-      }
-
-      // Bytes before a header are bytes we cannot place. Drop them rather
-      // than guessing at an offset.
-      if (!header || !buffer) return;
-
-      const chunk = new Uint8Array(event.data as ArrayBuffer);
-      // A sender that overruns its own header is a bug, not something to
-      // write past the end of the buffer for.
-      if (filled + chunk.byteLength > buffer.byteLength) {
-        finish(() => reject(new Error('The file arrived larger than it said it would be.')));
-        return;
-      }
-      buffer.set(chunk, filled);
-      filled += chunk.byteLength;
-      onProgress?.(filled / buffer.byteLength);
-
-      if (filled === buffer.byteLength) {
-        const bytes = buffer.buffer;
-        const fileName = header.fileName;
-        finish(() => resolve({ bytes, fileName }));
-      }
-    };
-
-    channel.addEventListener('message', onMessage);
-    channel.addEventListener('close', onClose);
+    const detach = listen(channel, {
+      onProgress,
+      onError: reject,
+      onFile: (file) => {
+        detach();
+        resolve(file);
+      },
+    });
   });
 }
 
@@ -202,6 +234,7 @@ function parseHeader(raw: string): Header | undefined {
       typeof value === 'object' &&
       value !== null &&
       (value as Header).type === 'file-header' &&
+      typeof (value as Header).trackId === 'string' &&
       typeof (value as Header).fileName === 'string' &&
       Number.isSafeInteger((value as Header).byteLength) &&
       (value as Header).byteLength >= 0

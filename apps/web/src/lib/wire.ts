@@ -11,9 +11,40 @@
  * a message, which is what lets the two share a channel.
  */
 
-/** Creator -> peers. Play this buffer from `fromSeconds` at `startAt`. */
+/** One entry in the playlist, as every member sees it. */
+export interface Track {
+  /** Minted by the creator's device. Names the track on this wire and nowhere else. */
+  id: string;
+  title: string;
+  byteLength: number;
+}
+
+/**
+ * Creator -> peers. The whole playlist, in order, resent whenever it changes
+ * and to each member as they arrive. Whole rather than a diff for the same
+ * reason the roster is: a missed message cannot leave a phantom track.
+ */
+export interface PlaylistMessage {
+  type: 'playlist';
+  tracks: Track[];
+}
+
+/**
+ * Creator -> peers. This is the track about to be played: get it ready.
+ *
+ * Separate from `play` because getting ready takes real time — the track is
+ * held encoded and has to be decoded — and every device can do that at once
+ * instead of each starting only when told to already be playing.
+ */
+export interface SelectCue {
+  type: 'select';
+  trackId: string;
+}
+
+/** Creator -> peers. Play this track from `fromSeconds` at `startAt`. */
 export interface PlayCue {
   type: 'play';
+  trackId: string;
   /** The creator's monotonic clock. Meaningless here until offset-corrected. */
   startAt: number;
   /** Where in the track to start. Non-zero when resuming from a pause. */
@@ -27,7 +58,12 @@ export interface PauseCue {
   pauseAt: number;
 }
 
-export type Cue = PlayCue | PauseCue;
+/** Creator -> peers. Stop now and go back to the start. Nothing to land on, so no instant. */
+export interface StopCue {
+  type: 'stop';
+}
+
+export type Cue = PlayCue | PauseCue | StopCue;
 
 /** Probe, peer -> creator. `id` comes back untouched so the reply can be matched. */
 export interface ClockPing {
@@ -48,14 +84,26 @@ export interface ClockPong {
   t2: number;
 }
 
-export type PeerMessage = Cue | ClockPing | ClockPong;
+export type PeerMessage = Cue | SelectCue | PlaylistMessage | ClockPing | ClockPong;
 
-/** The numeric fields each message must carry to be believed. */
-const FIELDS: Record<PeerMessage['type'], readonly string[]> = {
-  play: ['startAt', 'fromSeconds'],
-  pause: ['pauseAt'],
-  'clock-ping': ['id', 't0'],
-  'clock-pong': ['id', 't0', 't1', 't2'],
+type Fields = Record<string, unknown>;
+const numbers = (...keys: string[]) => (msg: Fields) => keys.every((key) => typeof msg[key] === 'number');
+const isTrack = (value: unknown): boolean =>
+  typeof value === 'object' &&
+  value !== null &&
+  typeof (value as Fields).id === 'string' &&
+  typeof (value as Fields).title === 'string' &&
+  typeof (value as Fields).byteLength === 'number';
+
+/** What each message must carry to be believed. */
+const VALID: Record<PeerMessage['type'], (msg: Fields) => boolean> = {
+  playlist: (msg) => Array.isArray(msg.tracks) && msg.tracks.every(isTrack),
+  select: (msg) => typeof msg.trackId === 'string',
+  play: (msg) => typeof msg.trackId === 'string' && numbers('startAt', 'fromSeconds')(msg),
+  pause: numbers('pauseAt'),
+  stop: () => true,
+  'clock-ping': numbers('id', 't0'),
+  'clock-pong': numbers('id', 't0', 't1', 't2'),
 };
 
 /**
@@ -73,10 +121,10 @@ export function parsePeerMessage(data: unknown): PeerMessage | undefined {
     return undefined;
   }
   if (typeof value !== 'object' || value === null) return undefined;
-  const msg = value as Record<string, unknown>;
-  const fields = typeof msg.type === 'string' && Object.hasOwn(FIELDS, msg.type)
-    ? FIELDS[msg.type as PeerMessage['type']]
-    : undefined;
-  if (!fields || !fields.every((key) => typeof msg[key] === 'number')) return undefined;
-  return msg as unknown as PeerMessage;
+  const msg = value as Fields;
+  const valid =
+    typeof msg.type === 'string' && Object.hasOwn(VALID, msg.type)
+      ? VALID[msg.type as PeerMessage['type']]
+      : undefined;
+  return valid?.(msg) ? (msg as unknown as PeerMessage) : undefined;
 }

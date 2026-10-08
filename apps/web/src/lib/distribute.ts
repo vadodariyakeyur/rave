@@ -1,44 +1,61 @@
 'use client';
 
-import type { Ready } from '@rave/protocol';
-import { decodeBytes } from './audio';
 import type { PeerLink } from './link';
 import type { Outgoing, Transfer } from './transfer';
 
-/** Reaching peers by id. The mesh, as far as the file is concerned. */
+/** Reaching peers by id. The mesh, as far as the files are concerned. */
 export interface Links {
   link(peerId: string): PeerLink;
 }
 
+/** One member's place in the queue. */
+interface Sending {
+  /** Tracks handed over in full. */
+  sent: Set<string>;
+  /** The track on the wire now, and how much of it has gone. */
+  current?: { trackId: string; fraction: number };
+  stalled: boolean;
+}
+
 /**
- * The creator's side of the barrier: who has the file, and how far along.
+ * The creator's side of the playlist: every track to every member.
  *
- * One send per peer, started the moment that peer appears — the link holds
- * it until the peer can take it — and never restarted while it is in flight.
- * The roster reads {@link transfers} and the Play button reads the same map —
- * both are looking at this, not at the server, because progress is a fact
- * about a DataChannel the server cannot see.
+ * One file at a time per member, in playlist order, each started the moment
+ * the one before it is through — the link holds the first until the member
+ * can take it. A track added later joins the back of everyone's queue; one
+ * removed before its turn is never sent.
  */
 export class Distributor {
   readonly #links: Links;
-  readonly #file: Outgoing;
-  readonly #transfers = new Map<string, Transfer>();
-  /**
-   * The send each peer's row belongs to. A peer who left and came back has
-   * a new row, and a late word from the old send must not land on it.
-   */
-  readonly #sends = new Map<string, object>();
+  readonly #members = new Map<string, Sending>();
   readonly #listeners = new Set<() => void>();
+  #tracks: readonly Outgoing[] = [];
   #closed = false;
 
-  constructor(links: Links, file: Outgoing) {
+  constructor(links: Links) {
     this.#links = links;
-    this.#file = file;
   }
 
-  /** What the roster renders, per peer id. */
+  /** What the roster renders, per member. Empty while the playlist is. */
   transfers(): ReadonlyMap<string, Transfer> {
-    return this.#transfers;
+    const total = this.#tracks.reduce((sum, t) => sum + t.bytes.byteLength, 0);
+    const out = new Map<string, Transfer>();
+    if (this.#tracks.length === 0) return out;
+    for (const [peerId, member] of this.#members) {
+      let done = 0;
+      for (const track of this.#tracks) {
+        if (member.sent.has(track.trackId)) done += track.bytes.byteLength;
+        else if (member.current?.trackId === track.trackId) {
+          done += track.bytes.byteLength * member.current.fraction;
+        }
+      }
+      const all = this.#tracks.every((t) => member.sent.has(t.trackId));
+      out.set(peerId, {
+        progress: total === 0 ? 1 : done / total,
+        state: member.stalled ? 'stalled' : all ? 'sent' : 'downloading',
+      });
+    }
+    return out;
   }
 
   subscribe(listener: () => void): () => void {
@@ -46,60 +63,71 @@ export class Distributor {
     return () => this.#listeners.delete(listener);
   }
 
+  /** The playlist, in order, on every change to it. */
+  setTracks(tracks: readonly Outgoing[]): void {
+    if (this.#closed) return;
+    this.#tracks = tracks;
+    for (const peerId of this.#members.keys()) this.#pump(peerId);
+    this.#notify();
+  }
+
   /** Called with the roster's peer ids, minus ourselves, on every change. */
   sync(peerIds: readonly string[]): void {
     if (this.#closed) return;
 
-    // Someone who left takes their transfer with them. Rejoining gets a new
+    // Someone who left takes their queue with them. Rejoining gets a new
     // peer id and a clean start, which is the whole recovery story.
     const present = new Set(peerIds);
-    for (const peerId of [...this.#transfers.keys()]) {
-      if (present.has(peerId)) continue;
-      this.#transfers.delete(peerId);
-      this.#sends.delete(peerId);
+    for (const peerId of [...this.#members.keys()]) {
+      if (!present.has(peerId)) this.#members.delete(peerId);
     }
-
     for (const peerId of peerIds) {
-      // In flight, done, or given up on: leave it. Restarting a live
-      // transfer would interleave two streams into one buffer.
-      if (this.#sends.has(peerId)) continue;
-      // A row from the moment they appear, even before their channel
-      // exists: the roster has something to render and the barrier has
-      // someone to wait for. Absent would read as neither.
-      this.#transfers.set(peerId, { progress: 0, state: 'downloading' });
-      const send = {};
-      this.#sends.set(peerId, send);
-      void this.#send(peerId, send);
+      if (this.#members.has(peerId)) continue;
+      this.#members.set(peerId, { sent: new Set(), stalled: false });
+      this.#pump(peerId);
     }
     this.#notify();
   }
 
   close(): void {
     this.#closed = true;
-    this.#transfers.clear();
-    this.#sends.clear();
+    this.#members.clear();
     this.#listeners.clear();
   }
 
-  async #send(peerId: string, send: object): Promise<void> {
-    /** Ignore a late update for a peer who has since left, or after close. */
-    const set = (transfer: Transfer) => {
-      if (this.#closed || this.#sends.get(peerId) !== send) return;
-      this.#transfers.set(peerId, transfer);
-      this.#notify();
-    };
+  /** Start this member's next track, unless one is already on the wire. */
+  #pump(peerId: string): void {
+    const member = this.#members.get(peerId);
+    // Mid-file or given up on: leave it. Two files at once down one channel
+    // would interleave into one buffer on the other side.
+    if (this.#closed || !member || member.current || member.stalled) return;
+    const next = this.#tracks.find((t) => !member.sent.has(t.trackId));
+    if (!next) return;
+    member.current = { trackId: next.trackId, fraction: 0 };
+    void this.#send(peerId, member, next);
+  }
+
+  async #send(peerId: string, member: Sending, track: Outgoing): Promise<void> {
+    // A late word for a member who has since left, or after close, is dropped.
+    const live = () => !this.#closed && this.#members.get(peerId) === member;
     try {
-      await this.#links
-        .link(peerId)
-        .sendFile(this.#file, (progress) => set({ progress, state: 'downloading' }));
-      // Sent, not ready: see Transfer. The peer's own `ready` is what the
-      // barrier reads, and it only arrives once they have decoded it.
-      set({ progress: 1, state: 'sent' });
+      await this.#links.link(peerId).sendFile(track, (fraction) => {
+        if (!live()) return;
+        member.current = { trackId: track.trackId, fraction };
+        this.#notify();
+      });
+      if (!live()) return;
+      member.sent.add(track.trackId);
+      member.current = undefined;
+      this.#pump(peerId);
     } catch {
+      if (!live()) return;
       // Whatever went wrong — stall, close, a channel that never opened —
-      // the roster says the same thing and the barrier stops waiting.
-      set({ progress: this.#transfers.get(peerId)?.progress ?? 0, state: 'stalled' });
+      // the roster says the same thing, and nothing more is sent to them.
+      member.current = undefined;
+      member.stalled = true;
     }
+    this.#notify();
   }
 
   #notify(): void {
@@ -107,48 +135,58 @@ export class Distributor {
   }
 }
 
-/** What a joiner ends up with: the decoded track, plus the bytes to re-serve. */
-export interface Received {
-  buffer: AudioBuffer;
-  fileName: string;
-  bytes: ArrayBuffer;
-}
-
-/** What a Receiver needs of the room, kept narrow so it is testable. */
-interface ReceiverRoom {
-  audioContext: Pick<AudioContext, 'decodeAudioData'>;
-  signaling: { send: (msg: Ready) => void };
+/** How one track stands on a member's device. */
+export interface Download {
+  /** 0 to 1. Absent before its turn has come. */
+  progress?: number;
+  state: 'waiting' | 'downloading' | 'ready';
 }
 
 /**
- * The joiner's side of the barrier: download from the creator, decode, then
- * say ready — in that order, and only in that order.
+ * The member's side of the playlist: take each track as it comes.
  *
- * Ready means "this device can actually play it". A file that arrived but
- * would not decode is stalled: claiming ready there produces a device that
- * is silent at playback with nothing on screen explaining why.
+ * Tracks are kept as they arrive — encoded. Decoded audio is tens of times
+ * larger, and a phone holding a whole playlist of it runs out of memory, so
+ * a track is only decoded when it is about to be played.
  */
 export class Receiver {
   readonly #creator: PeerLink;
-  readonly #room: ReceiverRoom;
   readonly #listeners = new Set<() => void>();
-  #transfer: Transfer = { progress: 0, state: 'downloading' };
-  #result: Received | undefined;
+  readonly #bytes = new Map<string, ArrayBuffer>();
+  #current: { trackId: string; progress: number } | undefined;
+  #stalled = false;
   #started = false;
   #closed = false;
 
-  constructor(creator: PeerLink, room: ReceiverRoom) {
+  constructor(creator: PeerLink) {
     this.#creator = creator;
-    this.#room = room;
   }
 
-  transfer(): Transfer {
-    return this.#transfer;
+  /** The encoded track, once all of it is here. */
+  bytes(trackId: string): ArrayBuffer | undefined {
+    return this.#bytes.get(trackId);
   }
 
-  /** The decoded track, once there is one. */
-  result(): Received | undefined {
-    return this.#result;
+  /** Where one track has got to. */
+  download(trackId: string): Download {
+    if (this.#bytes.has(trackId)) return { progress: 1, state: 'ready' };
+    if (this.#current?.trackId === trackId) {
+      return { progress: this.#current.progress, state: 'downloading' };
+    }
+    return { state: 'waiting' };
+  }
+
+  /** The link to the creator broke mid-playlist. Nothing more will arrive. */
+  stalled(): boolean {
+    return this.#stalled;
+  }
+
+  /** Forget every track not in the playlist any more. */
+  keep(trackIds: readonly string[]): void {
+    const wanted = new Set(trackIds);
+    for (const trackId of [...this.#bytes.keys()]) {
+      if (!wanted.has(trackId)) this.#bytes.delete(trackId);
+    }
   }
 
   subscribe(listener: () => void): () => void {
@@ -170,36 +208,31 @@ export class Receiver {
   close(): void {
     this.#closed = true;
     this.#listeners.clear();
+    this.#bytes.clear();
   }
 
   async #run(): Promise<void> {
     try {
-      const incoming = await this.#creator.receiveFile((progress) =>
-        this.#set({ progress, state: 'downloading' }),
+      await this.#creator.receiveFiles(
+        (incoming) => {
+          if (this.#closed) return;
+          this.#current = undefined;
+          this.#bytes.set(incoming.trackId, incoming.bytes);
+          this.#notify();
+        },
+        (progress, trackId) => {
+          this.#current = { trackId, progress };
+          this.#notify();
+        },
       );
-      // Decode before announcing: this is the step that decides whether this
-      // device can play at all.
-      const decoded = await decodeBytes(this.#room.audioContext, incoming.bytes);
-      // The room ended while this was decoding. Nobody is waiting on it.
-      if (this.#closed) return;
-      this.#result = {
-        buffer: decoded.buffer,
-        fileName: incoming.fileName,
-        bytes: incoming.bytes,
-      };
-      // Listeners first: whoever plays the track has it in hand before the
-      // room is told this device is ready to be cued.
-      this.#set({ progress: 1, state: 'ready' });
-      this.#room.signaling.send({ type: 'ready' });
     } catch {
-      // Dropped, stalled or undecodable — all the same to the roster, and
-      // none of them are ready.
-      this.#set({ progress: this.#transfer.progress, state: 'stalled' });
+      this.#current = undefined;
+      this.#stalled = true;
+      this.#notify();
     }
   }
 
-  #set(transfer: Transfer): void {
-    this.#transfer = transfer;
+  #notify(): void {
     for (const listener of [...this.#listeners]) listener();
   }
 }

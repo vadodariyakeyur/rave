@@ -1,9 +1,9 @@
 'use client';
 
-import { CLOSED_ERROR, receive, send, type Incoming, type Outgoing } from './transfer';
+import { CLOSED_ERROR, listen, send, type Incoming, type Outgoing } from './transfer';
 import { parsePeerMessage, type PeerMessage } from './wire';
 
-type Progress = (fraction: number) => void;
+type Progress = (fraction: number, trackId: string) => void;
 
 /**
  * One peer, as something you can talk to.
@@ -38,8 +38,11 @@ export interface PeerLink {
   /** Send the file once the peer can take it. Rejects on a stall or a close. */
   sendFile(file: Outgoing, onProgress?: Progress): Promise<void>;
 
-  /** Receive one file once the peer can send it. Rejects on a close. */
-  receiveFile(onProgress?: Progress): Promise<Incoming>;
+  /**
+   * Receive every file the peer sends, for as long as they can be reached.
+   * Never resolves; rejects when the channel closes or the peer leaves.
+   */
+  receiveFiles(onFile: (file: Incoming) => void, onProgress?: Progress): Promise<never>;
 }
 
 type Handler = (msg: never) => void;
@@ -117,8 +120,9 @@ export class ChannelLink implements PeerLink {
     await send(await this.#open(), file, onProgress);
   }
 
-  async receiveFile(onProgress?: Progress): Promise<Incoming> {
-    return receive(await this.#open(), onProgress);
+  async receiveFiles(onFile: (file: Incoming) => void, onProgress?: Progress): Promise<never> {
+    const channel = await this.#open();
+    return new Promise((_, reject) => listen(channel, { onFile, onProgress, onError: reject }));
   }
 
   /**
