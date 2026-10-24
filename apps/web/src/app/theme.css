@@ -7,12 +7,13 @@
    loaded there falls back to the system one), and so is the browser's
    themeColor. Only .dark is in use: layout.tsx hard-sets it.
 
-   The dark theme is Apple's dark greys (graphite, never pure black) with
-   Apple Music's pink-red as the one accent. The accent is a fill (the main
-   button, the progress bar); anything drawn in it on a grey is --ring, a
-   lighter tone, because the fill alone is too dark there. Green is for
-   everything live. Colour in the interface comes from the cover on the
-   screen, not from the theme, so these stay neutral. */
+   The dark theme is CRED's NeoPOP: near-black surfaces (#121212 page, #0d0d0d
+   cards) defined by hard 3px "plunk" edges rather than shadows or blur, white
+   text at fixed opacities, and saturated colour blocks. The accent is a fill
+   (the main button, the progress bar) in NeoPOP's poli purple; anything drawn
+   on a black is --ring, NeoPOP's neo paccha yellow-green, because it is the
+   one tone that cannot be missed there. Green is for everything live. Square
+   corners everywhere: the radii are 0, not derived from --radius. */
 
 :root {
   --background: oklch(1 0 0); /* #FFFFFF */
@@ -50,7 +51,9 @@
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Geist", ui-sans-serif, system-ui, sans-serif;
   --font-serif: ui-serif, Georgia, serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
-  --radius: 0.75rem;
+  --radius: 0;
+  --plunk: 3px;
+  --plunk-angle: 45deg;
   --shadow-x: 0px;
   --shadow-y: 4px;
   --shadow-blur: 12px;
@@ -70,47 +73,47 @@
 }
 
 .dark {
-  --background: oklch(0.155 0.004 286); /* #0C0C0E */
-  --foreground: oklch(0.971 0.003 286); /* #F5F5F7 */
-  --card: oklch(0.227 0.004 286); /* #1C1C1E panels, and glass where blur is off */
-  --card-foreground: oklch(0.971 0.003 286);
-  --popover: oklch(0.294 0.004 286); /* #2C2C2E */
-  --popover-foreground: oklch(0.971 0.003 286);
-  --primary: oklch(0.584 0.222 20); /* #E11D3F */
+  --background: oklch(0.182 0 90); /* #121212 popBlack 400 */
+  --foreground: oklch(0.931 0 90); /* white at 0.9 over the page */
+  --card: oklch(0.159 0 90); /* #0d0d0d popBlack 500: surfaces are darker than the page */
+  --card-foreground: oklch(0.931 0 90);
+  --popover: oklch(0.2 0 90); /* #161616 popBlack 300 */
+  --popover-foreground: oklch(0.931 0 90);
+  --primary: oklch(0.536 0.27 285); /* #6A35FF poliPurple 500 */
   --primary-foreground: oklch(1 0 0);
-  --secondary: oklch(0.294 0.004 286); /* #2C2C2E */
-  --secondary-foreground: oklch(0.971 0.003 286);
-  --muted: oklch(0.294 0.004 286);
-  --muted-foreground: oklch(0.754 0.014 286); /* #AEAEB8 */
-  --accent: oklch(0.349 0.003 286); /* #3A3A3C */
-  --accent-foreground: oklch(0.971 0.003 286);
-  --destructive: oklch(0.756 0.149 36); /* #FF8A6B */
-  --destructive-foreground: oklch(0.155 0.004 286);
-  --border: oklch(0.402 0.003 286); /* #48484A */
-  --input: oklch(0.227 0.004 286);
-  --ring: oklch(0.716 0.181 14); /* #FF6B81 */
-  --chart-1: oklch(0.756 0.208 147); /* #30D158 live */
-  --chart-2: oklch(0.885 0.181 95); /* #FFD60A host */
-  --chart-3: oklch(0.817 0.119 228);
-  --chart-4: oklch(0.5 0.08 270);
-  --chart-5: oklch(0.35 0.06 270);
-  --sidebar: oklch(0.227 0.004 286);
-  --sidebar-foreground: oklch(0.971 0.003 286);
-  --sidebar-primary: oklch(0.584 0.222 20);
+  --secondary: oklch(1 0 0); /* NeoPOP's secondary button: white, black text */
+  --secondary-foreground: oklch(0.159 0 90);
+  --muted: oklch(0.2 0 90);
+  --muted-foreground: oklch(0.633 0 90); /* #8A8A8A: white at 0.5 */
+  --accent: oklch(0.36 0 90); /* #3D3D3D hover tint */
+  --accent-foreground: oklch(1 0 0);
+  --destructive: oklch(0.643 0.201 31); /* #EE4D37 */
+  --destructive-foreground: oklch(0.159 0 90);
+  --border: oklch(0.36 0 90); /* #3D3D3D popBlack 200 */
+  --input: oklch(0.159 0 90);
+  --ring: oklch(0.948 0.201 117); /* #E5FE40 neoPaccha 500 */
+  --chart-1: oklch(0.888 0.189 160); /* #3BFFAD parkGreen 500: live */
+  --chart-2: oklch(0.866 0.155 87); /* #FFCB45 mannna 500: host */
+  --chart-3: oklch(0.669 0.224 12); /* #FF426F pinkPong 500 */
+  --chart-4: oklch(0.467 0.2 263); /* #144CC7 */
+  --chart-5: oklch(0.36 0 90);
+  --sidebar: oklch(0.159 0 90);
+  --sidebar-foreground: oklch(0.931 0 90);
+  --sidebar-primary: oklch(0.536 0.27 285);
   --sidebar-primary-foreground: oklch(1 0 0);
-  --sidebar-accent: oklch(0.349 0.003 286);
-  --sidebar-accent-foreground: oklch(0.971 0.003 286);
-  --sidebar-border: oklch(0.402 0.003 286);
-  --sidebar-ring: oklch(0.716 0.181 14);
+  --sidebar-accent: oklch(0.36 0 90);
+  --sidebar-accent-foreground: oklch(1 0 0);
+  --sidebar-border: oklch(0.36 0 90);
+  --sidebar-ring: oklch(0.948 0.201 117);
   --shadow-color: oklch(0 0 0);
-  --shadow-2xs: 0px 1px 2px 0px oklch(0 0 0 / 0.3);
-  --shadow-xs: 0px 1px 2px 0px oklch(0 0 0 / 0.3);
-  --shadow-sm: 0px 1px 3px 0px oklch(0 0 0 / 0.4);
-  --shadow: 0px 2px 6px 0px oklch(0 0 0 / 0.4);
-  --shadow-md: 0px 4px 12px 0px oklch(0 0 0 / 0.45);
-  --shadow-lg: 0px 8px 24px 0px oklch(0 0 0 / 0.5);
-  --shadow-xl: 0px 12px 32px 0px oklch(0 0 0 / 0.55);
-  --shadow-2xl: 0px 16px 48px 0px oklch(0 0 0 / 0.6);
+  --shadow-2xs: none;
+  --shadow-xs: none;
+  --shadow-sm: none;
+  --shadow: none;
+  --shadow-md: none;
+  --shadow-lg: none;
+  --shadow-xl: none;
+  --shadow-2xl: none;
 }
 
 @theme inline {
@@ -148,13 +151,15 @@
   --color-sidebar-ring: var(--sidebar-ring);
 
   --font-sans: var(--font-sans);
+  --font-display: var(--font-display-loaded), var(--font-sans);
   --font-mono: var(--font-mono);
   --font-serif: var(--font-serif);
 
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
+  /* Square: NeoPOP has no rounded corners, and 0 minus 4px is not a radius. */
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
 
   --shadow-2xs: var(--shadow-2xs);
   --shadow-xs: var(--shadow-xs);

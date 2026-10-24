@@ -31,7 +31,7 @@ export function OffsetSlider({
           <Headphones className="size-4" />
           My audio delay
         </label>
-        <span className="text-sm tabular-nums text-muted-foreground">
+        <span className="font-display text-2xl tabular-nums text-ring">
           {valueMs > 0 ? '+' : ''}
           {valueMs}ms
         </span>

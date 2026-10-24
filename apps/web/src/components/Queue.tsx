@@ -2,7 +2,7 @@
 
 import { Check, ChevronDown, ChevronUp, LoaderCircle, Play, Plus, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Cover } from '@/components/Cover';
+import { Cover, glowOf } from '@/components/Cover';
 import { Equalizer } from '@/components/Equalizer';
 import type { LiveRoom, PlaylistItem, RoomSnapshot } from '@/lib/room';
 import { cn } from '@/lib/utils';
@@ -19,16 +19,19 @@ export function Queue({
   adding,
   addError,
   onFiles,
+  className,
 }: {
   room: LiveRoom;
   snapshot: RoomSnapshot;
   adding: boolean;
   addError: string | null;
   onFiles: (files: FileList | null) => void;
+  className?: string;
 }) {
   const { isCreator, playing, playlist } = snapshot;
+  const nextIndex = playlist.findIndex((t) => t.id === snapshot.currentTrackId) + 1;
   return (
-    <section aria-label="Playlist" className="flex flex-col gap-1">
+    <section aria-label="Playlist" className={cn('flex flex-col gap-1', className)}>
       <div className="flex items-center justify-between px-2 text-sm font-semibold text-muted-foreground">
         <h2 className="flex items-center gap-1.5">
           Playlist
@@ -39,7 +42,7 @@ export function Queue({
           // what is seen, and it shows the input's focus.
           <label
             htmlFor="add-tracks"
-            className="grid size-9 cursor-pointer place-items-center rounded-full transition-colors duration-200 hover:bg-white/12 hover:text-foreground has-focus-visible:ring-2 has-focus-visible:ring-ring has-disabled:pointer-events-none has-disabled:opacity-50"
+            className="grid size-9 cursor-pointer place-items-center rounded-none transition-colors duration-200 hover:bg-white/12 hover:text-foreground has-focus-visible:ring-2 has-focus-visible:ring-ring has-disabled:pointer-events-none has-disabled:opacity-50"
           >
             {adding ? <LoaderCircle className="size-4 animate-spin" /> : <Plus className="size-4" />}
             <span className="sr-only">Add tracks</span>
@@ -61,22 +64,23 @@ export function Queue({
       </div>
 
       {playlist.length > 0 && (
-        <ol className="flex flex-col gap-0.5">
+        <ol className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto">
           {playlist.map((track, index) => {
             const isCurrent = track.id === snapshot.currentTrackId;
             return (
               <li
                 key={track.id}
                 className={cn(
-                  'flex animate-pop flex-col gap-1 rounded-[20px] p-2 transition-colors duration-200 hover:bg-white/8',
-                  isCurrent && 'bg-white/12',
+                  'flex animate-pop flex-col gap-1 rounded-none border-l-4 py-1.5 pr-1.5 pl-2 transition-colors duration-200',
+                  isCurrent ? 'plunk block-lime mr-[3px] mb-[3px]' : 'hover:bg-white/8',
                 )}
+                style={{ borderLeftColor: glowOf(track.title, track.art)[0] }}
               >
                 <div className="flex min-w-0 items-center gap-2.5">
                   <span className="relative">
-                    <Cover title={track.title} art={track.art} className="size-11 rounded-lg" />
+                    <Cover title={track.title} art={track.art} className="size-10 rounded-none" />
                     {isCurrent && (
-                      <span className="absolute inset-0 grid place-items-center rounded-lg bg-black/55 text-chart-1">
+                      <span className="absolute inset-0 grid place-items-center rounded-none bg-black/55 text-ring">
                         <Equalizer playing={playing} />
                       </span>
                     )}
@@ -85,56 +89,64 @@ export function Queue({
                     <span className={cn('truncate text-sm', isCurrent ? 'font-semibold' : 'font-medium')}>
                       {track.title}
                     </span>
-                    <span className="text-xs text-muted-foreground">{index + 1}</span>
+                    <span className={cn('text-xs', !isCurrent && 'text-muted-foreground')}>
+                      {isCurrent
+                        ? playing
+                          ? 'Now playing'
+                          : 'Selected'
+                        : index === nextIndex
+                          ? `Next · ${index + 1}`
+                          : index + 1}
+                    </span>
                   </span>
                   {!isCreator && <DownloadStatus track={track} />}
+                  {isCreator && (
+                    <div className="flex shrink-0 items-center">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className={rowButton(isCurrent)}
+                        aria-label={`Play ${track.title}`}
+                        onClick={() => void room.playTrack(track.id)}
+                      >
+                        <Play />
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className={rowButton(isCurrent)}
+                        aria-label={`Move ${track.title} up`}
+                        disabled={index === 0}
+                        onClick={() => room.moveTrack(track.id, -1)}
+                      >
+                        <ChevronUp />
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className={rowButton(isCurrent)}
+                        aria-label={`Move ${track.title} down`}
+                        disabled={index === playlist.length - 1}
+                        onClick={() => room.moveTrack(track.id, 1)}
+                      >
+                        <ChevronDown />
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className={rowButton(isCurrent)}
+                        aria-label={`Remove ${track.title}`}
+                        onClick={() => room.removeTrack(track.id)}
+                      >
+                        <X />
+                      </Button>
+                    </div>
+                  )}
                 </div>
-                {isCreator && (
-                  <div className="flex items-center justify-end gap-0.5">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className="size-9 text-foreground"
-                      aria-label={`Play ${track.title}`}
-                      onClick={() => void room.playTrack(track.id)}
-                    >
-                      <Play />
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className="size-9"
-                      aria-label={`Move ${track.title} up`}
-                      disabled={index === 0}
-                      onClick={() => room.moveTrack(track.id, -1)}
-                    >
-                      <ChevronUp />
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className="size-9"
-                      aria-label={`Move ${track.title} down`}
-                      disabled={index === playlist.length - 1}
-                      onClick={() => room.moveTrack(track.id, 1)}
-                    >
-                      <ChevronDown />
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className="size-9"
-                      aria-label={`Remove ${track.title}`}
-                      onClick={() => room.removeTrack(track.id)}
-                    >
-                      <X />
-                    </Button>
-                  </div>
-                )}
               </li>
             );
           })}
@@ -153,16 +165,29 @@ export function Queue({
             {[0, 1, 2].map((i) => (
               <Cover
                 key={i}
-                className={cn('size-10 rounded-lg border border-dashed border-white/25 bg-transparent', i > 0 && '-ml-4')}
+                className={cn(
+                  'size-10 rounded-none border border-dashed border-white/25 bg-transparent',
+                  i > 0 && '-ml-4',
+                )}
               />
             ))}
           </div>
           <p className="text-sm text-muted-foreground">
-            {isCreator ? 'No tracks yet. Add some with +, or drop files on the stage.' : 'The host has not added any tracks yet.'}
+            {isCreator
+              ? 'No tracks yet. Add some with +, or drop files on the stage.'
+              : 'The host has not added any tracks yet.'}
           </p>
         </div>
       )}
     </section>
+  );
+}
+
+/** A row's icon button: on the lime current row it is black on lime, and a disabled one fades instead of filling grey. */
+function rowButton(isCurrent: boolean) {
+  return cn(
+    'size-8 disabled:bg-transparent disabled:text-current disabled:opacity-30',
+    isCurrent ? 'text-background hover:bg-black/15 hover:text-background' : 'text-foreground',
   );
 }
 

@@ -4,7 +4,8 @@
 
 /* Tailwind 4 is CSS-first: there is no tailwind.config.js and that is correct,
    not a missing file. What is here is what a theme does not carry: motion,
-   and the few native controls that need styling by hand. */
+   the plunk (NeoPOP's extruded edge), and the few native controls that need
+   styling by hand. */
 
 @custom-variant dark (&:is(.dark *));
 
@@ -21,6 +22,7 @@
   --animate-float: float 4s ease-in infinite;
   --animate-float-up: float-up 2.6s cubic-bezier(0.2, 0.7, 0.3, 1) both;
   --animate-fade: fade 0.9s ease-out both;
+  --animate-marquee: marquee 22s linear infinite;
 
   @keyframes spin-slow {
     to { transform: rotate(360deg); }
@@ -51,6 +53,9 @@
     12% { opacity: 1; transform: translateY(-8vh) scale(1.1); }
     to { opacity: 0; transform: translateY(-62vh) translateX(2rem) rotate(14deg) scale(1); }
   }
+  @keyframes marquee {
+    to { transform: translateX(-50%); }
+  }
   @keyframes fade {
     from { opacity: 0; }
   }
@@ -76,82 +81,6 @@
   /* Thin icons everywhere, in one line. */
   .lucide { stroke-width: 1.75; }
 
-  /* Film grain over the whole page: fixed and inert, so it never scrolls or
-     takes a tap. The tile is drawn once and repeated. */
-  body::after {
-    content: '';
-    position: fixed;
-    inset: 0;
-    z-index: 1000;
-    pointer-events: none;
-    opacity: 0.045;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-  }
-
-  /* Liquid Glass, approximated for the web. Apple ships the real material
-     only on its own platforms; this is blur, saturation, a lit edge and a
-     specular rim, which is what the browser can do. It is for the
-     navigation layer (sidebars, bars, the player, dialogs, controls) and
-     never for content: content uses .panel. Glass does not sit on glass. */
-  .glass {
-    position: relative;
-    isolation: isolate;
-    background:
-      linear-gradient(135deg, rgb(255 255 255 / 0.14), rgb(255 255 255 / 0.04)),
-      color-mix(in oklab, var(--color-card) 55%, transparent);
-    -webkit-backdrop-filter: blur(var(--glass-blur, 24px)) saturate(180%);
-    backdrop-filter: blur(var(--glass-blur, 24px)) saturate(180%);
-    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.2), 0 10px 36px rgb(0 0 0 / 0.3);
-  }
-  /* The rim: a 1px gradient edge, bright where light would catch it. */
-  .glass::before,
-  .glass-clear::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    z-index: -1;
-    border-radius: inherit;
-    padding: 1px;
-    pointer-events: none;
-    background: linear-gradient(135deg, rgb(255 255 255 / 0.5), rgb(255 255 255 / 0.04) 32%, rgb(255 255 255 / 0.04) 68%, rgb(255 255 255 / 0.28));
-    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-    -webkit-mask-composite: xor;
-    mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
-  }
-  /* Clear: more see-through, for the player over the cover. A 35% dark
-     layer is part of its background, as Apple advises over bright media. */
-  .glass-clear {
-    position: relative;
-    isolation: isolate;
-    background:
-      linear-gradient(135deg, rgb(255 255 255 / 0.12), rgb(255 255 255 / 0.02)),
-      rgb(0 0 0 / 0.35);
-    -webkit-backdrop-filter: blur(14px) saturate(170%);
-    backdrop-filter: blur(14px) saturate(170%);
-    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.22), 0 12px 40px rgb(0 0 0 / 0.4);
-  }
-  /* Refraction at the edge, Chromium only: an SVG displacement filter works
-     as a backdrop-filter nowhere else. Elsewhere the plain blur above stays. */
-  @supports (not (-webkit-hyphens: none)) and (not (-moz-appearance: none)) {
-    .lens {
-      -webkit-backdrop-filter: url(#lens) blur(6px) saturate(170%);
-      backdrop-filter: url(#lens) blur(6px) saturate(170%);
-    }
-  }
-  @media (max-width: 767px) {
-    .glass { --glass-blur: 16px; }
-  }
-  @media (prefers-reduced-transparency: reduce) {
-    .glass, .glass-clear {
-      background: var(--color-card);
-      -webkit-backdrop-filter: none;
-      backdrop-filter: none;
-    }
-  }
-  @media (prefers-contrast: more) {
-    .glass, .glass-clear { background: var(--color-card); -webkit-backdrop-filter: none; backdrop-filter: none; }
-  }
-
   /* The one native control the app keeps (see OffsetSlider). */
   input[type='range'] {
     appearance: none;
@@ -161,36 +90,34 @@
   }
   input[type='range']::-webkit-slider-runnable-track {
     height: 0.625rem;
-    border-radius: 999px;
-    background: var(--color-muted);
+    border-radius: 0;
+    background: var(--color-border);
   }
   input[type='range']::-moz-range-track {
     height: 0.625rem;
-    border-radius: 999px;
-    background: var(--color-muted);
+    border-radius: 0;
+    background: var(--color-border);
   }
   input[type='range']::-webkit-slider-thumb {
     appearance: none;
     width: 1.75rem;
     height: 1.75rem;
     margin-top: -0.5625rem;
-    border-radius: 999px;
-    border: 3px solid var(--color-primary-foreground);
+    border-radius: 0;
+    border: 3px solid var(--color-foreground);
     background: var(--color-primary);
-    box-shadow: var(--shadow-sm);
   }
   input[type='range']::-moz-range-thumb {
     width: 1.5rem;
     height: 1.5rem;
-    border-radius: 999px;
-    border: 3px solid var(--color-primary-foreground);
+    border-radius: 0;
+    border: 3px solid var(--color-foreground);
     background: var(--color-primary);
-    box-shadow: var(--shadow-sm);
   }
   input[type='range']:focus-visible {
     outline: 2px solid var(--color-ring);
     outline-offset: 2px;
-    border-radius: 999px;
+    border-radius: 0;
   }
 
   /* Nothing loops and nothing slides in; states still change, at once. */
@@ -207,15 +134,88 @@
   }
 }
 
-/* A standard material, for content: a tinted, mostly opaque surface with a
-   lit top edge and a hairline. Depth in a dark theme comes from light, not
-   shadow. Glass is for controls and navigation, never this. */
-@utility panel {
-  background: color-mix(in oklab, var(--color-card) 72%, transparent);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.07), 0 0 0 1px rgb(255 255 255 / 0.06);
+/* NeoPOP's plunk: a face with two solid edges skewed 45 degrees, which read
+   as an extrusion. Drawn outside the box, so it needs a parent that does not
+   clip (not overflow-hidden). On near-black surfaces the edges are the only
+   boundary there is; --plunk-right and --plunk-bottom retint them. Press it
+   with .plunk-press. For controls and navigation; content uses .flat. */
+@utility plunk {
+  position: relative;
+  background: var(--face, var(--color-card));
+  &::before,
+  &::after {
+    content: '';
+    position: absolute;
+    pointer-events: none;
+    transform-origin: 0 0;
+    transition: transform 0.12s ease-in-out;
+  }
+  &::after {
+    left: 100%;
+    top: 0;
+    width: var(--plunk);
+    height: 100%;
+    background: var(--plunk-right, #8a8a8a);
+    transform: skewY(var(--plunk-angle));
+  }
+  &::before {
+    left: 0;
+    top: 100%;
+    width: 100%;
+    height: var(--plunk);
+    background: var(--plunk-bottom, #3d3d3d);
+    transform: skewX(var(--plunk-angle));
+  }
 }
 
-/* Unlayered, so it beats the .panel utility above. */
+/* A pressed plunk sinks into its own edges: face and edges move together. */
+@utility plunk-press {
+  transition: translate 0.12s ease-in-out;
+  &:active:not(:disabled) { translate: var(--plunk) var(--plunk); }
+  &:active:not(:disabled)::before,
+  &:active:not(:disabled)::after { transform: none; opacity: 0; }
+}
+
+/* Content: a flat NeoPOP surface, a hairline and nothing else. */
+@utility flat {
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+}
+
+/* Colour faces: a solid NeoPOP surface for headlines and actions, with black
+   text (AA on all four) and edges in a darker shade of its own colour. Pair
+   with .plunk; content stays on .flat. */
+@utility block-lime {
+  --face: var(--color-ring);
+  background: var(--face);
+  color: #0d0d0d;
+  --plunk-right: color-mix(in oklch, var(--face) 70%, black);
+  --plunk-bottom: color-mix(in oklch, var(--face) 55%, black);
+}
+@utility block-green {
+  --face: var(--color-chart-1);
+  background: var(--face);
+  color: #0d0d0d;
+  --plunk-right: color-mix(in oklch, var(--face) 70%, black);
+  --plunk-bottom: color-mix(in oklch, var(--face) 55%, black);
+}
+@utility block-yellow {
+  --face: var(--color-chart-2);
+  background: var(--face);
+  color: #0d0d0d;
+  --plunk-right: color-mix(in oklch, var(--face) 70%, black);
+  --plunk-bottom: color-mix(in oklch, var(--face) 55%, black);
+}
+@utility block-pink {
+  --face: var(--color-chart-3);
+  background: var(--face);
+  color: #0d0d0d;
+  --plunk-right: color-mix(in oklch, var(--face) 70%, black);
+  --plunk-bottom: color-mix(in oklch, var(--face) 55%, black);
+}
+
+/* Unlayered, so these beat the utilities above. The skewed edges cannot carry
+   a contrast bump, so faces get a real border. */
 @media (prefers-contrast: more) {
-  .panel { background: var(--color-card); }
+  .plunk, .flat { border: 1px solid var(--color-foreground); }
 }

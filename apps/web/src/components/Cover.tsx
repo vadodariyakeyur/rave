@@ -16,18 +16,21 @@ export function glowOf(title: string, art?: TrackArt): [string, string] {
 export function Cover({
   title,
   art,
+  grid,
   className,
 }: {
   /** Undefined draws the empty disc: no track yet. */
   title?: string;
   art?: TrackArt;
+  /** Tiles per side of the generated cover (default 4). */
+  grid?: number;
   className?: string;
 }) {
   return (
     <div
       aria-hidden
       className={cn('relative grid shrink-0 place-items-center overflow-hidden bg-muted', className)}
-      style={title !== undefined && !art ? { background: coverOf(title).background } : undefined}
+      style={title !== undefined && !art ? { background: coverOf(title, grid).background } : undefined}
     >
       {art ? (
         // eslint-disable-next-line @next/next/no-img-element -- a small blob: URL made here; the image optimiser cannot reach it.

@@ -3,7 +3,8 @@ import type { Peer } from '@rave/protocol';
 import { Avatar } from '@/components/Avatar';
 import { Button } from '@/components/ui/button';
 import type { PeerConnectionState } from '@/lib/mesh';
-import { avatarOf } from '@/lib/cover';
+import { glowOf } from '@/components/Cover';
+import { Tag } from '@/components/Tag';
 import { cn } from '@/lib/utils';
 
 /**
@@ -33,15 +34,14 @@ export function TalkGrid({
       {peers.map((peer) => {
         const connection = connections.get(peer.peerId);
         const isSelf = peer.peerId === selfPeerId;
-        const [from] = avatarOf(peer.displayName).stops;
-        const tint = `oklch(${from.l} ${from.c} ${from.h})`;
+        const tint = glowOf(peer.displayName)[0];
         return (
           <li
             key={peer.peerId}
             data-person
             className={cn(
-              'panel flex animate-pop flex-col items-center gap-3 rounded-[20px] p-5 text-center outline-2 -outline-offset-2 transition-colors',
-              speaking.has(peer.peerId) ? 'outline-chart-1' : 'outline-transparent',
+              'flat flex animate-pop flex-col items-center gap-3 p-5 text-center outline-4 -outline-offset-4 transition-colors',
+              speaking.has(peer.peerId) ? 'outline-ring' : 'outline-transparent',
             )}
             style={{
               background: `radial-gradient(circle at 50% 28%, color-mix(in oklch, ${tint} 26%, transparent), transparent 62%), color-mix(in oklab, var(--color-card) 72%, transparent)`,
@@ -49,19 +49,19 @@ export function TalkGrid({
           >
             <Avatar name={peer.displayName} size="lg" speaking={speaking.has(peer.peerId)} />
             <div className="flex min-w-0 max-w-full flex-col items-center gap-1">
-              <span className="max-w-full truncate font-bold">{peer.displayName}</span>
+              <span className="max-w-full truncate font-display text-xl">{peer.displayName}</span>
               <span className="flex flex-wrap items-center justify-center gap-x-2 text-xs text-muted-foreground">
-                {isSelf && <span>you</span>}
+                {isSelf && <Tag tone="wait">You</Tag>}
                 {peer.isCreator && (
-                  <span className="flex items-center gap-1 text-chart-2">
-                    <Crown className="size-3.5" />
-                    host
-                  </span>
+                  <Tag tone="host">
+                    <Crown aria-hidden className="size-3" />
+                    Host
+                  </Tag>
                 )}
               </span>
             </div>
             <span className="flex h-5 items-center gap-1.5 text-xs">
-              {speaking.has(peer.peerId) && <span className="font-semibold text-chart-1">speaking</span>}
+              {speaking.has(peer.peerId) && <Tag tone="live">Speaking</Tag>}
               {isSelf && selfMuted && (
                 <span className="flex items-center gap-1 text-muted-foreground">
                   <MicOff aria-hidden className="size-3.5" />

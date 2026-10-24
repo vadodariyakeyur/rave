@@ -27,6 +27,11 @@ describe('the dark theme', () => {
     ['destructive', 'background'],
     ['accent-foreground', 'accent'],
     ['foreground', 'popover'],
+    // Black text on the colour faces (.block-*).
+    ['card', 'ring'],
+    ['card', 'chart-1'],
+    ['card', 'chart-2'],
+    ['card', 'chart-3'],
   ];
   for (const [fg, bg] of text) {
     it(`keeps ${fg} readable on ${bg} (AA, 4.5)`, () => {
@@ -35,7 +40,7 @@ describe('the dark theme', () => {
   }
 
   const ui: [string, string][] = [
-    // Blurple is a fill; drawn on a grey, the ring tone stands in for it.
+    // The primary is a fill; drawn on a black, the ring tone stands in for it.
     ['ring', 'background'],
     ['chart-1', 'card'],
     ['ring', 'card'],

@@ -12,7 +12,7 @@ export function Equalizer({ playing = true, className }: { playing?: boolean; cl
         <span
           key={delay}
           className={cn(
-            'h-full w-1 origin-bottom rounded-full bg-current',
+            'h-full w-1 origin-bottom rounded-none bg-current',
             playing ? 'animate-eq' : 'scale-y-30',
           )}
           style={{ animationDelay: delay }}

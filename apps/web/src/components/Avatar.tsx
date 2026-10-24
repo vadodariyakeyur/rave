@@ -29,7 +29,7 @@ export function Avatar({
     <span
       aria-hidden
       className={cn(
-        'grid shrink-0 place-items-center rounded-full font-bold transition-shadow duration-150',
+        'grid shrink-0 place-items-center rounded-none font-bold transition-shadow duration-150',
         SIZES[size],
         speaking && 'ring-[3px] ring-chart-1',
         className,

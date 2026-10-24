@@ -2,13 +2,12 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import Link from 'next/link';
-import { ArrowLeft, LoaderCircle, Plus } from 'lucide-react';
+import { LoaderCircle, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Backdrop } from '@/components/Backdrop';
 import { RoomPreview } from '@/components/RoomPreview';
-import { Shell, TopBar } from '@/components/Shell';
+import { Header, Shell } from '@/components/Shell';
 import { createRoom } from '@/lib/session';
 
 export default function CreateRoom() {
@@ -46,115 +45,111 @@ export default function CreateRoom() {
   }
 
   return (
-    <Shell backdrop={<Backdrop title={roomName.trim() || 'party'} still calm />}>
-      <TopBar>
-        <Link href="/" aria-label="Back to rooms" className="flex size-10 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-white/12 hover:text-foreground">
-          <ArrowLeft className="size-5" />
-        </Link>
-        Create a room
-      </TopBar>
-      <div className="grid flex-1 items-start gap-8 p-4 sm:p-8 lg:grid-cols-[27.5rem_1fr]">
-      <div className="glass flex w-full max-w-110 animate-rise flex-col gap-6 rounded-[28px] p-6 text-card-foreground">
-        <div className="flex flex-col gap-2">
-          <h2 className="text-3xl font-bold tracking-tight">Room details</h2>
-          <p className="text-muted-foreground">You add the music once you are inside.</p>
-        </div>
+    <Shell
+      backdrop={<Backdrop title="party" calm />}
+      header={<Header back="/" title="Create a room" />}
+      cta={
+        <Button type="submit" form="create-form" size="lg" disabled={!ready || creating} className="w-full">
+          {creating ? <LoaderCircle className="animate-spin" /> : <Plus />}
+          {creating ? 'Creating…' : 'Create room'}
+        </Button>
+      }
+      aside={
+        <>
+          <section className="plunk block-yellow mr-[3px] mb-[3px] flex animate-rise flex-col gap-2 p-5">
+            <h1 className="font-display text-[2rem] leading-[0.95] tracking-tight lg:text-[2.75rem]">
+              Name it. Share it. Play it.
+            </h1>
+            <p className="font-semibold">You add the music once you are inside.</p>
+          </section>
 
-        <form onSubmit={create} className="flex flex-col gap-5">
-          <Field label="Room name" htmlFor="room-name">
-            <Input
-              id="room-name"
-              value={roomName}
-              onChange={(e) => setRoomName(e.target.value)}
-              placeholder="Kitchen speakers"
-              maxLength={64}
-              autoComplete="off"
-              disabled={creating}
+          <section aria-label="Preview">
+            <RoomPreview
+              name={roomName}
+              description={description.trim() || undefined}
+              mode="music"
+              still
+              memberCount={1}
+              hasPasscode={passcode !== ''}
             />
-          </Field>
-
-          <Field label="Description" htmlFor="description" hint="Optional. Shown in the room list.">
-            <Input
-              id="description"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="Friday night playlist"
-              maxLength={200}
-              autoComplete="off"
-              disabled={creating}
-            />
-          </Field>
-
-          <Field label="Your name" htmlFor="display-name">
-            <Input
-              id="display-name"
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-              placeholder="Keyur"
-              maxLength={32}
-              autoComplete="off"
-              disabled={creating}
-            />
-          </Field>
-
-          <Field
-            label="Passcode"
-            htmlFor="passcode"
-            hint={
-              passcodeOk
-                ? 'Optional. Leave empty and anyone can join.'
-                : 'At least 4 characters, or leave it empty.'
-            }
-            invalid={!passcodeOk}
-          >
-            <Input
-              id="passcode"
-              value={passcode}
-              onChange={(e) => setPasscode(e.target.value)}
-              maxLength={32}
-              autoComplete="off"
-              aria-invalid={!passcodeOk}
-              disabled={creating}
-            />
-          </Field>
-
-          {error && (
-            <p role="alert" className="text-sm font-medium text-destructive">
-              {error}
-            </p>
-          )}
-
-          <Button type="submit" size="lg" disabled={!ready || creating} className="w-full">
-            {creating ? <LoaderCircle className="animate-spin" /> : <Plus />}
-            {creating ? 'Creating…' : 'Create room'}
-          </Button>
-        </form>
-      </div>
-
-      <aside aria-label="Preview" className="flex animate-rise flex-col gap-3 [animation-delay:100ms]">
-        <p className="text-sm font-semibold text-muted-foreground">How it will look in the room list</p>
-        <div className="max-w-110">
-          <RoomPreview
-            name={roomName}
-            description={description.trim() || undefined}
-            mode="music"
-            memberCount={1}
-            hasPasscode={passcode !== ''}
+          </section>
+        </>
+      }
+    >
+      <form id="create-form" onSubmit={create} className="grid gap-3 lg:grid-cols-2">
+        <Field step="01" label="Room name" htmlFor="room-name">
+          <Input
+            id="room-name"
+            value={roomName}
+            onChange={(e) => setRoomName(e.target.value)}
+            placeholder="Kitchen speakers"
+            maxLength={64}
+            autoComplete="off"
+            disabled={creating}
           />
-        </div>
-      </aside>
-      </div>
+        </Field>
+
+        <Field step="02" label="Description" htmlFor="description" hint="Optional. Shown in the room list.">
+          <Input
+            id="description"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="Friday night playlist"
+            maxLength={200}
+            autoComplete="off"
+            disabled={creating}
+          />
+        </Field>
+
+        <Field step="03" label="Your name" htmlFor="display-name">
+          <Input
+            id="display-name"
+            value={displayName}
+            onChange={(e) => setDisplayName(e.target.value)}
+            placeholder="Keyur"
+            maxLength={32}
+            autoComplete="off"
+            disabled={creating}
+          />
+        </Field>
+
+        <Field
+          step="04"
+          label="Passcode"
+          htmlFor="passcode"
+          hint={passcodeOk ? 'Optional. Leave empty and anyone can join.' : 'At least 4 characters, or leave it empty.'}
+          invalid={!passcodeOk}
+        >
+          <Input
+            id="passcode"
+            value={passcode}
+            onChange={(e) => setPasscode(e.target.value)}
+            maxLength={32}
+            autoComplete="off"
+            aria-invalid={!passcodeOk}
+            disabled={creating}
+          />
+        </Field>
+
+        {error && (
+          <p role="alert" className="text-sm lg:col-span-2 font-medium text-destructive">
+            {error}
+          </p>
+        )}
+      </form>
     </Shell>
   );
 }
 
 function Field({
+  step,
   label,
   htmlFor,
   hint,
   invalid,
   children,
 }: {
+  step: string;
   label: string;
   htmlFor: string;
   hint?: string;
@@ -162,14 +157,20 @@ function Field({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex flex-col gap-2">
-      <label htmlFor={htmlFor} className="text-sm font-semibold text-muted-foreground">
-        {label}
-      </label>
-      {children}
-      {hint && (
-        <p className={`text-sm ${invalid ? 'text-destructive' : 'text-muted-foreground'}`}>{hint}</p>
-      )}
+    <div className="flat flex items-start gap-4 p-4 focus-within:border-ring">
+      <span
+        aria-hidden
+        className="font-display text-4xl leading-none text-transparent [-webkit-text-stroke:1px_var(--color-ring)]"
+      >
+        {step}
+      </span>
+      <div className="flex min-w-0 flex-1 flex-col gap-2">
+        <label htmlFor={htmlFor} className="text-[0.8125rem] font-extrabold tracking-wide text-ring uppercase">
+          {label}
+        </label>
+        {children}
+        {hint && <p className={`text-sm ${invalid ? 'text-destructive' : 'text-muted-foreground'}`}>{hint}</p>}
+      </div>
     </div>
   );
 }

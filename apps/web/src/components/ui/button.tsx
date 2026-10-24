@@ -5,26 +5,26 @@ import { cn } from '@/lib/utils';
 // Vendored from shadcn/ui — this file is owned in-repo and editable,
 // not a dependency. `npx shadcn@latest add <name>` drops siblings here.
 //
-// Capsules, as Apple's controls are. The main action is the accent, lit along
-// its top edge; the rest are flat tints that sit inside whatever glass holds
-// them (glass does not go on glass). The press is a shrink on the press
-// itself, quick, and the colour changes follow at the softer pace.
+// NeoPOP's plunk: square, extra-bold, with two solid edges that the press sinks
+// into (see .plunk in globals.css). Ghost and link are flat and carry no edge.
+// Disabled loses its edges, the honest signal that it will not depress.
+const plunk = 'plunk plunk-press disabled:[--plunk-right:transparent] disabled:[--plunk-bottom:transparent] mr-[3px] mb-[3px]';
 const buttonVariants = cva(
-  'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-full text-[0.9375rem] font-semibold transition-[scale,background-color,filter] duration-200 ease-soft active:scale-[0.96] active:duration-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:size-5 [&_svg]:shrink-0',
+  'relative inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-none text-[0.9375rem] font-extrabold uppercase tracking-wide focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:bg-muted-foreground disabled:text-white/50 [&_svg]:size-5 [&_svg]:shrink-0',
   {
     variants: {
       variant: {
-        default: 'bg-primary text-primary-foreground shadow-[inset_0_1px_0_rgb(255_255_255/0.28)] hover:brightness-110',
-        destructive: 'bg-destructive text-destructive-foreground hover:brightness-110',
-        outline: 'bg-white/12 text-foreground hover:bg-white/18',
-        secondary: 'bg-white/12 text-foreground hover:bg-white/18',
-        ghost: 'text-muted-foreground hover:bg-white/10 hover:text-foreground',
-        link: 'text-ring underline-offset-4 hover:underline',
+        default: `${plunk} bg-primary text-primary-foreground [--plunk-right:var(--color-ring)] [--plunk-bottom:var(--color-ring)]`,
+        destructive: `${plunk} bg-destructive text-destructive-foreground`,
+        outline: `${plunk} bg-card text-foreground`,
+        secondary: `${plunk} bg-secondary text-secondary-foreground [--plunk-right:#8a8a8a] [--plunk-bottom:#e0e0e0]`,
+        ghost: 'normal-case tracking-normal text-muted-foreground hover:bg-accent hover:text-foreground',
+        link: 'normal-case tracking-normal text-ring underline-offset-4 hover:underline',
       },
       size: {
-        default: 'h-11 px-5',
-        sm: 'h-10 px-4',
-        lg: 'h-14 px-8 text-base',
+        default: 'h-10 px-5',
+        sm: 'h-[30px] px-4',
+        lg: 'h-[50px] px-8 text-base',
         icon: 'size-11',
       },
     },

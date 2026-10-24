@@ -2,21 +2,23 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { Lock, Mic } from 'lucide-react';
+import { ChevronRight, Mic } from 'lucide-react';
 import type { RoomSummary } from '@rave/protocol';
 import { Backdrop } from '@/components/Backdrop';
-import { Cover } from '@/components/Cover';
+import { Cover, glowOf } from '@/components/Cover';
+import { Tag } from '@/components/Tag';
 import { Equalizer } from '@/components/Equalizer';
-import { Shell, TopBar } from '@/components/Shell';
+import { JoinCode } from '@/components/JoinCode';
+import { Header, Shell } from '@/components/Shell';
+import { buttonVariants } from '@/components/ui/button';
 import { Signaling } from '@/lib/signaling';
 import { cn } from '@/lib/utils';
 
 /**
  * Every live room, kept current for as long as the page is open.
  *
- * Laid out the way Apple Music lays out Radio: a bold title, one banner in
- * the accent colour, then rows of big square covers with a line under each.
- * The page itself stays a flat graphite; the colour is in the covers.
+ * A headline block, then every room as a full-width row, with the one action
+ * (create a room) stuck to the bottom.
  *
  * Its own socket rather than a shared one: the room's socket is created on
  * the tap that arms audio and belongs to that room, and this page has
@@ -34,124 +36,134 @@ export default function Home() {
     };
   }, []);
 
+  const listening = rooms?.reduce((n, r) => n + r.memberCount, 0) ?? 0;
+  const ticker = `LIVE NOW · ${rooms?.length ?? 0} ROOMS · ${listening} LISTENING · SAME SECOND, EVERY PHONE · `;
+
   return (
     <Shell
-      backdrop={<Backdrop title="party" still calm />}
-      sidebar={
-        rooms && rooms.length > 0 ? (
-          <section aria-label="Live now" className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-2 pb-2">
-            <h2 className="px-3 pt-3 pb-1 text-sm font-semibold text-muted-foreground">Live now</h2>
-            <ul className="flex flex-col gap-0.5">
-              {rooms.map((room) => (
-                <li key={room.code}>
-                  <Link
-                    href={`/room/${room.code}${room.hasPasscode ? '?locked=1' : ''}`}
-                    className="flex items-center gap-3 rounded-[20px] p-2 transition-colors duration-200 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  >
-                    <Cover title={room.roomName} className="size-11 rounded-lg" />
-                    <span className="flex min-w-0 flex-col leading-tight">
-                      <span className="truncate font-semibold">{room.roomName}</span>
-                      <span className="text-sm text-muted-foreground">{room.memberCount} here</span>
-                    </span>
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          </section>
-        ) : undefined
+      backdrop={<Backdrop title="party" calm />}
+      header={<Header />}
+      cta={
+        <Link href="/create" className={buttonVariants({ size: 'lg', className: 'w-full' })}>
+          Create room
+        </Link>
       }
-    >
-      <TopBar>
-        <Equalizer className="h-4 text-ring" />
-        <h1>Rooms</h1>
-      </TopBar>
-
-      <section className="flex flex-col gap-8 px-2 pt-4 pb-6 sm:px-4">
-        <div className="flex animate-rise flex-wrap items-center gap-x-8 gap-y-4 rounded-[20px] bg-primary px-6 py-5 text-primary-foreground shadow-[inset_0_1px_0_rgb(255_255_255/0.28)]">
-          <span className="grid size-12 shrink-0 place-items-center rounded-2xl bg-white/20">
-            <Equalizer className="h-6" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <p className="text-xl font-bold tracking-tight">Every phone in the room, one big speaker.</p>
-            <p className="opacity-90">
+      banner={
+        rooms !== undefined && (
+          <div className="overflow-hidden bg-chart-3 py-2 text-background">
+            {/* Read once: the repeat is decoration. */}
+            <p className="sr-only">{ticker}</p>
+            <div aria-hidden className="flex w-max animate-marquee font-display text-lg whitespace-nowrap uppercase">
+              <span className="pr-8">{ticker.repeat(4)}</span>
+              <span className="pr-8">{ticker.repeat(4)}</span>
+            </div>
+          </div>
+        )
+      }
+      aside={
+        <>
+          <section className="plunk block-lime mr-[3px] mb-[3px] flex animate-rise flex-col gap-3 overflow-visible p-5">
+            <h1 className="font-display text-[2.5rem] leading-[0.95] tracking-tight lg:text-[3.5rem]">
+              Every phone, one speaker.
+            </h1>
+            <p className="max-w-[26ch] font-semibold">
               Add tracks, share the link, and everyone hears the same second at the same time.
             </p>
-          </div>
-          <Link
-            href="/create"
-            className="inline-flex h-11 items-center rounded-full bg-white px-6 font-semibold text-black transition-transform duration-200 ease-soft active:scale-[0.96] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-primary"
-          >
-            Create room
-          </Link>
-        </div>
-
-        <h2 className="text-4xl font-bold tracking-tight">Open rooms</h2>
+            <Discs className="flex pt-2" />
+          </section>
+          {rooms !== undefined && (
+            <dl className="grid grid-cols-3 gap-3">
+              {[
+                [rooms.length, 'rooms', 'block-green'],
+                [listening, 'listening', 'block-yellow'],
+                ['0', 'ms drift', 'block-lime'],
+              ].map(([n, label, face]) => (
+                <div key={label} className={cn('plunk mr-[3px] mb-[3px] flex flex-col p-3', face as string)}>
+                  <dd className="font-display text-4xl leading-none">{n}</dd>
+                  <dt className="text-[0.6875rem] font-extrabold tracking-wider uppercase">{label}</dt>
+                </div>
+              ))}
+            </dl>
+          )}
+          <JoinCode />
+        </>
+      }
+    >
+      <section aria-labelledby="live-rooms" className="flex flex-col gap-3">
+        <h2 id="live-rooms" className="font-display text-2xl tracking-tight uppercase">
+          Live rooms{rooms ? ` · ${rooms.length}` : ''}
+        </h2>
 
         {rooms === undefined ? (
-          <div role="status" className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-4">
+          <div role="status" className="flex flex-col gap-2">
             <span className="sr-only">Looking for rooms…</span>
-            {[0, 1, 2, 3].map((i) => (
-              <div key={i} className="aspect-square animate-pulse rounded-[20px] bg-white/8" />
+            {['bg-ring/15', 'bg-chart-1/15', 'bg-chart-3/15'].map((tint) => (
+              <div key={tint} className={cn('h-24 animate-pulse', tint)} />
             ))}
           </div>
         ) : rooms.length === 0 ? (
-          <div className="panel flex max-w-xl animate-pop flex-col items-start gap-4 rounded-[20px] p-6">
-            <Discs className="flex" />
-            <div className="flex flex-col gap-1">
-              <h3 className="text-xl font-bold tracking-tight">No rooms open yet</h3>
-              <p className="text-muted-foreground">
-                Use the button above and others on this network will see your room here.
-              </p>
-            </div>
+          <div className="plunk block-green mr-[3px] mb-[3px] flex animate-pop flex-col items-start gap-4 p-5">
+            <h3 className="font-display text-4xl leading-none">Be the first room.</h3>
+            <p className="font-semibold">Use the button below and others on this network will see your room here.</p>
+            <ol className="grid w-full grid-cols-3 gap-2 text-sm font-extrabold uppercase">
+              {['Create', 'Share', 'Hear it together'].map((step, i) => (
+                <li key={step} className="flex flex-col gap-1 border-t-2 border-background pt-2">
+                  <span aria-hidden className="font-display text-2xl leading-none">
+                    0{i + 1}
+                  </span>
+                  {step}
+                </li>
+              ))}
+            </ol>
           </div>
         ) : (
-          <ul className="grid grid-cols-2 gap-x-4 gap-y-6 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+          <ul className="grid gap-3 lg:grid-cols-2">
             {rooms.map((room, index) => (
               <li
                 key={room.code}
-                className="animate-rise"
+                className={cn('animate-rise', index === 0 && 'lg:col-span-2')}
                 style={{ animationDelay: `${index * 60}ms` }}
               >
-                {/* The whole tile is the link: it is the only thing to do
+                {/* The whole row is the link: it is the only thing to do
                     with a room, and a small target on a phone is a miss. */}
                 <Link
                   href={`/room/${room.code}${room.hasPasscode ? '?locked=1' : ''}`}
-                  className="group flex flex-col gap-2.5 rounded-[20px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-4 focus-visible:ring-offset-background"
+                  style={{
+                    borderLeft: `6px solid ${glowOf(room.roomName)[0]}`,
+                  }}
+                  className={cn(
+                    'flex items-center gap-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                    index === 0 ? 'plunk block-yellow mr-[3px] mb-[3px] p-4' : 'flat p-3',
+                  )}
                 >
-                  <span className="panel relative block aspect-square overflow-hidden rounded-[20px] transition-transform duration-500 ease-soft group-hover:-translate-y-0.5 group-active:scale-[0.98]">
-                    <Cover
-                      title={room.roomName}
-                      className="size-full transition-transform duration-700 ease-soft group-hover:scale-105"
-                    />
-                    <span aria-hidden className="absolute inset-x-0 bottom-0 h-3/5 bg-gradient-to-t from-black/70 to-transparent" />
-                    <span className="absolute inset-x-4 bottom-4 flex items-end justify-between gap-2">
-                      <span className="flex min-w-0 items-center gap-2 text-2xl leading-tight font-bold tracking-tight text-white">
-                        <span className="line-clamp-2 break-words">{room.roomName}</span>
-                        {room.hasPasscode && <Lock aria-label="Needs a passcode" className="size-4 shrink-0" />}
+                  <Cover title={room.roomName} className={cn('shrink-0', index === 0 ? 'size-20' : 'size-14')} />
+                  <span className="flex min-w-0 flex-1 flex-col gap-1 leading-tight">
+                    <span className="truncate font-display text-xl">{room.roomName}</span>
+                    <span className="flex items-center gap-1.5 text-sm">
+                      {room.mode === 'talk' ? (
+                        <Mic className="size-3.5 shrink-0" />
+                      ) : room.nowPlaying ? (
+                        <Equalizer className="h-3 shrink-0" />
+                      ) : null}
+                      <span className="truncate">
+                        {room.mode === 'talk' ? 'talking' : room.nowPlaying || room.description || 'music'}
                       </span>
                     </span>
-                    <span className="absolute top-3 right-3 flex items-center gap-1.5 rounded-full bg-black/45 px-2.5 py-1 text-xs font-semibold text-white">
-                      {room.mode === 'talk' ? (
-                        <>
-                          <Mic className="size-3.5 text-chart-1" />
-                          talking
-                        </>
-                      ) : (
-                        <>
-                          {room.nowPlaying ? <Equalizer className="h-3 text-chart-1" /> : null}
-                          music
-                        </>
-                      )}
+                    <span className="flex flex-wrap items-center gap-2">
+                      <Tag tone={room.mode === 'talk' ? 'talk' : 'music'}>
+                        {room.mode === 'talk' ? 'Talk' : 'Music'}
+                      </Tag>
+                      {room.hasPasscode && <Tag tone="locked">Locked</Tag>}
+                      <span className="flex items-center gap-1.5 text-sm">
+                        <span
+                          aria-hidden
+                          className="size-2 animate-pulse rounded-full bg-chart-1 motion-reduce:animate-none"
+                        />
+                        {room.memberCount} {room.memberCount === 1 ? 'person' : 'people'}
+                      </span>
                     </span>
                   </span>
-                  <span className="flex flex-col px-1 text-sm leading-snug">
-                    <span className="truncate">
-                      {room.mode === 'music' && room.nowPlaying ? `playing ${room.nowPlaying}` : room.description || 'Open room'}
-                    </span>
-                    <span className="text-muted-foreground">
-                      {room.memberCount} {room.memberCount === 1 ? 'person' : 'people'}
-                    </span>
-                  </span>
+                  <ChevronRight aria-hidden className="size-5 shrink-0" />
                 </Link>
               </li>
             ))}
@@ -171,13 +183,13 @@ function Discs({ className }: { className?: string }) {
           key={title}
           title={title}
           className={cn(
-            'size-20 rounded-2xl shadow-lg ring-4 ring-background md:size-28',
+            'size-14 rounded-none shadow-lg ring-4 ring-background lg:size-20',
             i > 0 && '-ml-6',
             ['-rotate-6', 'rotate-3 -translate-y-2', '-rotate-2'][i],
           )}
         />
       ))}
-      <Equalizer className="ml-4 h-6 text-ring" />
+      <Equalizer className="ml-4 h-6 text-background" />
     </div>
   );
 }

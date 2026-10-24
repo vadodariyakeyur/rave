@@ -34,12 +34,12 @@ export function TrackProgress({
         aria-valuemax={Math.round(durationSeconds)}
         aria-valuenow={Math.round(positionSeconds)}
         aria-valuetext={`${formatDuration(positionSeconds)} of ${formatDuration(durationSeconds)}`}
-        className="h-1 w-full overflow-hidden rounded-full bg-white/20"
+        className="h-2 w-full overflow-hidden rounded-none bg-white/20"
       >
         <div
           // Linear and about as long as the tick that re-reads it, so the
           // bar glides between readings instead of stepping.
-          className="h-full rounded-full bg-white transition-[width] duration-200 ease-linear"
+          className="h-full rounded-none bg-white transition-[width] duration-200 ease-linear"
           style={{ width: `${percent}%` }}
         />
       </div>

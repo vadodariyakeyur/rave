@@ -3,6 +3,7 @@ import type { PeerConnectionState } from '@/lib/mesh';
 import type { Transfer } from '@/lib/transfer';
 import { Check, Crown, LoaderCircle, Mic, MicOff, UserMinus, WifiOff } from 'lucide-react';
 import { Avatar } from '@/components/Avatar';
+import { Tag } from '@/components/Tag';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
@@ -44,20 +45,25 @@ export function Roster({
               <li
                 key={peer.peerId}
                 data-person
-                className="group flex min-h-12 animate-pop items-center gap-2.5 rounded-2xl px-2 py-1.5 text-sm hover:bg-white/8"
+                className="group flex min-h-12 animate-pop items-center gap-2.5 rounded-none px-2 py-1.5 text-sm hover:bg-white/8"
               >
                 <span className="relative shrink-0">
                   <Avatar name={peer.displayName} size="sm" speaking={speaking?.has(peer.peerId)} />
                   <span
                     aria-hidden
-                    className="absolute -right-0.5 -bottom-0.5 size-3.5 rounded-full border-[3px] border-card bg-chart-1"
+                    className="absolute -right-0.5 -bottom-0.5 size-3.5 rounded-none border-[3px] border-card bg-ring"
                   />
                 </span>
                 <span className="flex min-w-0 flex-1 flex-col">
                   <span className="flex min-w-0 items-center gap-1.5">
                     <span className="truncate font-medium">{peer.displayName}</span>
-                    {peer.peerId === selfPeerId && <span className="text-xs text-muted-foreground">you</span>}
-                    {peer.isCreator && <Crown aria-label="host" className="size-3.5 shrink-0 text-chart-2" />}
+                    {peer.peerId === selfPeerId && <Tag tone="wait">You</Tag>}
+                    {peer.isCreator && (
+                      <Tag tone="host">
+                        <Crown aria-hidden className="size-3" />
+                        Host
+                      </Tag>
+                    )}
                     {speaking?.has(peer.peerId) && (
                       <Mic aria-label="speaking" className="size-3.5 shrink-0 animate-pulse text-chart-1" />
                     )}

@@ -27,7 +27,7 @@ export function JoinQr({ url }: { url: string }) {
         // of physical target to lock focus, and a smaller code means the
         // scanner hunts. shape-rendering keeps module edges from blurring
         // into each other when the browser scales the grid up.
-        className="size-44 rounded-lg bg-white p-3 [shape-rendering:crispEdges]"
+        className="size-44 rounded-none bg-white p-3 [shape-rendering:crispEdges]"
         role="img"
         aria-label={`QR code to join this room at ${url}`}
       >

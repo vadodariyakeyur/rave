@@ -34,7 +34,7 @@ const ATTACK = 0.5;
 const DECAY = 0.14;
 
 /** What "loud" is measured against never drops below this, so silence is not amplified into noise. */
-const GAIN_FLOOR = 0.4;
+const GAIN_FLOOR = 0.5;
 
 /** Per frame, how slowly a remembered loudest level fades: a few seconds to halve at 60 fps. */
 const GAIN_FALL = 0.99;
@@ -45,10 +45,10 @@ const GAIN_FALL = 0.99;
  * spectrum to go on, the bass sets the scale and every other bar sits on a
  * flat low shelf whatever the music does.
  */
-const OWN_BAND = 0.8;
+const OWN_BAND = 0.5;
 
 /** Softens the middle so most of the ring takes part; the peaks still stand out. */
-const CONTRAST = 1.5;
+const CONTRAST = 2.5;
 
 export interface Ring {
   /** Each bar, 0 to 1, mirrored: bar i equals bar N-1-i. Also last frame's, which is what it is smoothed from. */

@@ -14,7 +14,7 @@ import { JoinQr } from '@/components/JoinQr';
  * closes on Escape and returns focus to the button, which is all a dialog
  * has to do here.
  */
-export function ShareDialog({ url, hasPasscode }: { url: string; hasPasscode: boolean }) {
+export function ShareDialog({ url, code, hasPasscode }: { url: string; code: string; hasPasscode: boolean }) {
   const dialog = useRef<HTMLDialogElement>(null);
 
   async function copy() {
@@ -43,11 +43,11 @@ export function ShareDialog({ url, hasPasscode }: { url: string; hasPasscode: bo
         aria-labelledby="share-title"
         // A click on the backdrop lands on the dialog itself, not on its content.
         onClick={(e) => e.target === dialog.current && dialog.current.close()}
-        className="glass fixed m-auto w-[calc(100%-2.5rem)] max-w-110 animate-pop rounded-[28px] p-6 text-card-foreground backdrop:bg-black/50"
+        className="block-lime fixed m-auto w-[calc(100%-2.5rem)] max-w-110 animate-pop border-2 border-ring p-6 backdrop:bg-black/60"
       >
         <div className="flex flex-col items-center gap-4">
           <div className="flex w-full items-center justify-between">
-            <h2 id="share-title" className="text-xl font-bold">
+            <h2 id="share-title" className="font-display text-xl uppercase">
               Share this room
             </h2>
             <Button
@@ -60,7 +60,12 @@ export function ShareDialog({ url, hasPasscode }: { url: string; hasPasscode: bo
               <X />
             </Button>
           </div>
-          <JoinQr url={url} />
+          <p aria-label={`Room code ${code}`} className="font-display text-7xl leading-none tracking-wider">
+            {code}
+          </p>
+          <div className="bg-white p-3">
+            <JoinQr url={url} />
+          </div>
           <div className="flex w-full gap-2">
             <Input readOnly value={url} aria-label="Room link" onFocus={(e) => e.target.select()} />
             <Button type="button" size="icon" aria-label="Copy link" onClick={() => void copy()}>
@@ -68,7 +73,7 @@ export function ShareDialog({ url, hasPasscode }: { url: string; hasPasscode: bo
             </Button>
           </div>
           {hasPasscode && (
-            <p className="text-center text-sm text-muted-foreground">
+            <p className="text-center text-sm font-semibold">
               This link includes the passcode, so anyone who has it can join.
             </p>
           )}

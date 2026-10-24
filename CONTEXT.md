@@ -79,38 +79,47 @@ its code and shows it, so a person sees what they are about to join.
   talk mode. Anyone can listen without a microphone. Echo cancellation is on, but feedback
   between devices in the same room needs headphones. There is no cap on talk rooms, only a
   warning past 8 people.
-- **Looks.** The frame is Apple Music's, in Liquid Glass: panels of glass float on one window-wide
-  backdrop, inset from the edges by the same gap. On the left a sidebar (the app's mark, Rooms and
-  Create a room, then in a room its name, the Music and Talk rows, the playlist with a cover per
-  track, and the person's own name with the audio-delay setting); in the middle the main area
-  scrolling under a floating bar; on the right a people panel grouped under Host and Members.
-  Music mode's main area is a stage (cover, ring of bars, title, progress with time left,
-  transport); talk mode's is a tile per person with a ring around whoever is speaking and a
-  control bar. Under 1200px the people panel sits behind a button; on a phone there is one panel
-  at a time (Room, Playlist, People) with a floating tab bar, and a player capsule above it once
-  the stage is out of view. Glass is for navigation and controls only (sidebar, bars, player,
-  dialogs, buttons); content (the stage, room cards, talk tiles) is a plain tinted surface. Glass
-  is approximated with blur, a lit edge and a specular rim (`globals.css`), plus an SVG
-  displacement filter on the player in Chromium only; with reduced transparency or more contrast
-  it becomes solid. Controls are capsules; panels 28px, tiles 20px, each inner radius its outer
-  minus the gap. The colour comes from the cover: behind the window sits a backdrop
-  (`Backdrop.tsx`) of four blurred copies of the current cover, turning slowly, which crossfades
-  when the track changes and holds still when nothing plays. Covers come from the picture inside
-  the file when it has one (`artwork.ts`, read from bytes a device already holds, so nothing
-  extra is sent) and are generated from the title otherwise (`cover.ts`); avatars are generated
-  from the name. The ring (`visualizer.ts`) is drawn from an analyser on the player's own output,
-  limited in how fast it can rise so it cannot flash, and stops when nothing plays, the tab is
-  hidden, or it is switched off. The theme is `theme.css`: Apple's dark greys, Apple Music's
-  pink-red for the main action (the accent), green for anything live, the system font first
-  (SF on Apple devices) with Geist elsewhere; covers and avatars are content and do not change
-  with the theme. A faint grain lies over the page.
+- **Looks.** The frame is CRED's NeoPOP, ported rather than installed (see `docs/adr/`): one column on a
+  phone and, from 1024px up, two that fit the screen without the page scrolling (the identity
+  on the left, the content on the right, each scrolling on its own if it must), on the page
+  background with the dimmed backdrop behind it: a full-bleed
+  header (back arrow or the app's mark, a title, share), blocks, and a call-to-action bar stuck to
+  the bottom of the screen. Blocks are square-cornered and defined by hairlines and hard edges,
+  with no blur, translucency, shadow or grain. Headlines and actions sit on solid colour faces (lime, green, yellow, pink; black text) and
+  content on flat dark boxes; the display font (Bricolage Grotesque, from next/font) is for
+  headlines and numerals only; the marquee on Home and the drifting colour wash behind the calm
+  pages are the only ambient motion. Home is a headline and a full-width row per live
+  room, with Create room in the bar; Create and Pre-join are one block per field, with the
+  submit in the bar; on Create the backdrop and the preview's colours stay fixed while the name is typed. A room shows its name and mode, then music mode's stage (cover, ring of
+  bars, title, progress with time left) or talk mode's tile per person with a ring around
+  whoever is speaking, then, on a wide screen, the playlist under the stage in a box that scrolls on its own (the Music/Talk switch and the audio delay sit beside the people), or, on a phone, two tiles, Playlist and People, each opening a sheet from the
+  bottom (on a wide screen they are panels beside the stage instead of sheets; the playlist with the Music/Talk switch for the host, and the person's own audio
+  delay; the people grouped under Host and Members). The bar holds the host's transport in
+  music mode, a line saying the host picks what plays for members, and Mute/Unmute with
+  reactions in talk mode. Buttons and tiles are plunked:
+  a face with two solid 3px edges skewed 45 degrees (`.plunk` in `globals.css`), which a press
+  sinks into over 120ms; a disabled one loses its edges. Content (the stage, room cards, talk
+  tiles, sheets) is `.flat`, a hairline border. A plunk is drawn outside its box, so it cannot
+  sit inside `overflow-hidden`. Type is extra-bold for headings and buttons, with white at
+  fixed opacities for secondary text. With more contrast, plunks and flats get a full-strength
+  1px border; with reduced motion nothing animates. The colour comes from the cover: behind the
+  window sits a backdrop (`Backdrop.tsx`), one dimmed, unblurred block of the current cover,
+  which crossfades when the track changes. Covers come from the picture inside the file when it
+  has one (`artwork.ts`, read from bytes a device already holds, so nothing extra is sent) and
+  are generated from the title otherwise (`cover.ts`); avatars are generated from the name. The
+  ring (`visualizer.ts`) is drawn from an analyser on the player's own output, limited in how
+  fast it can rise so it cannot flash, and stops when nothing plays, the tab is hidden, or it is
+  switched off. The theme is `theme.css`: near-black greys (#121212 page, #0d0d0d surfaces),
+  NeoPOP's poli purple for the main action (the accent, a fill), neo paccha yellow-green for
+  focus and for anything drawn on black, green for anything live, Geist; covers and avatars are
+  content and do not change with the theme.
 - **Reactions.** A tap sends one of a fixed set to the server, which relays it to everyone else
   in the room, stamped with who sent it, and drops anything past five a second from one
   connection. The sender draws their own at once.
 - **Opening a room.** The creator enters a room name (up to 64 characters), an optional
   description (up to 200), a display name (up to 32) and an optional passcode. The room starts
   with no tracks.
-- **Joining.** From the room list, or by code or link. A room with a passcode asks for it
+- **Joining.** From the room list, by typing the code into the field on Home or the 404 page, or by link. Pre-join remembers the last display name in the browser. A room with a passcode asks for it
   unless the link carries it. Anyone may join at any point in a room's life; there is no
   lock, no size cap and no ready barrier ([ADR 0001](docs/adr/0001-late-join-replaces-the-ready-barrier.md)).
 - **Tracks.** Only the creator adds, removes, reorders, plays, pauses, resumes, restarts and

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import Link from 'next/link';
 import { useParams, useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
-import { ArrowLeft, DoorOpen, Headphones, ListMusic, Mic, MicOff, Music, Settings, Users } from 'lucide-react';
+import { ArrowLeft, DoorOpen, Headphones, ListMusic, Mic, MicOff, Music, Users } from 'lucide-react';
 import type { Mode } from '@rave/protocol';
 import { getRoom, subscribeRoom } from '@/lib/session';
 import type { Ended } from '@/lib/room';
@@ -12,20 +12,19 @@ import type { VoiceState } from '@/lib/voice';
 import { POSITION_TICK_MS } from '@/lib/player';
 import { loadUserOffset, saveUserOffset } from '@/lib/offset';
 import { encodePasscode } from '@/lib/passcode';
-import { loadVisuals, saveVisuals } from '@/lib/visuals';
 import { keepAwake, onHidden } from '@/lib/wake';
 import { Avatar } from '@/components/Avatar';
 import { SpeakerBackdrop } from '@/components/SpeakerBackdrop';
-import { Cover } from '@/components/Cover';
 import { Roster } from '@/components/Roster';
-import { Bar, Shell, TopBar, type Panel } from '@/components/Shell';
+import { Header, Shell, useWide } from '@/components/Shell';
 import { DebugOverlay } from '@/components/DebugOverlay';
-import { MiniPlayer } from '@/components/MiniPlayer';
 import { OffsetSlider } from '@/components/OffsetSlider';
 import { Queue } from '@/components/Queue';
 import { Reactions } from '@/components/Reactions';
 import { ShareDialog } from '@/components/ShareDialog';
-import { Stage } from '@/components/Stage';
+import { Sheet } from '@/components/Sheet';
+import { Tag } from '@/components/Tag';
+import { Stage, Transport } from '@/components/Stage';
 import { TalkGrid } from '@/components/TalkGrid';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -89,9 +88,7 @@ export function RoomClient() {
   const stalled = useRef<ReadonlySet<string>>(new Set());
   useEffect(() => {
     if (!transfers) return;
-    const now = new Set(
-      [...transfers].filter(([, t]) => t.state === 'stalled').map(([peerId]) => peerId),
-    );
+    const now = new Set([...transfers].filter(([, t]) => t.state === 'stalled').map(([peerId]) => peerId));
     for (const peerId of now) {
       if (stalled.current.has(peerId)) continue;
       // Both sides mark stalled, but a joiner's map holds only itself — being
@@ -155,9 +152,7 @@ export function RoomClient() {
   // prevent a backgrounded tab — it makes it visible and less likely.
   useEffect(() => {
     if (!isCreator || ended) return;
-    return onHidden(() =>
-      toast.warning('Keep this tab open. This device is the clock for the room.'),
-    );
+    return onHidden(() => toast.warning('Keep this tab open. This device is the clock for the room.'));
   }, [isCreator, ended]);
 
   // A bad file among several: the good ones are in, and this says which
@@ -178,39 +173,20 @@ export function RoomClient() {
   const joinUrl = useSyncExternalStore(
     // Never changes for the life of this mount, so the subscribe is a no-op.
     () => () => {},
-    () =>
-      `${window.location.origin}${window.location.pathname}` +
-      (passcode ? `#p=${encodePasscode(passcode)}` : ''),
+    () => `${window.location.origin}${window.location.pathname}` + (passcode ? `#p=${encodePasscode(passcode)}` : ''),
     // The server has no location, and rendering a QR to a guessed host would
     // be worse than rendering none: undefined hides it until hydration.
     () => undefined,
   );
 
-  // Whether the ring of bars moves. Lazily, like the offset: no storage on the server.
-  const [visuals, setVisuals] = useState(() => loadVisuals());
-  const changeVisuals = useCallback((on: boolean) => {
-    setVisuals(on);
-    saveVisuals(on);
-  }, []);
-
-  // On a phone the stage scrolls away; the mini player takes over exactly then.
-  const stage = useRef<HTMLElement>(null);
-  const [stageVisible, setStageVisible] = useState(true);
-  const mode = snapshot?.mode;
-  useEffect(() => {
-    const el = stage.current;
-    if (!el) return;
-    const observer = new IntersectionObserver(([entry]) => setStageVisible(entry!.isIntersecting));
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [inRoom, mode]);
-
   // Files dropped anywhere on the music screen, for the creator.
   const [dragging, setDragging] = useState(false);
 
-  // Which column a phone shows, and whether the audio-delay slider is open.
-  const [panel, setPanel] = useState<Panel>('main');
-  const [delayOpen, setDelayOpen] = useState(false);
+  // Which sheet is open.
+  const [sheet, setSheet] = useState<'playlist' | 'people' | null>(null);
+  const closeSheet = useCallback(() => setSheet(null), []);
+  // From 1024px the playlist and the people are panels beside the stage, not sheets.
+  const wide = useWide();
 
   // No room means a refresh or a pasted link — the tap that arms audio has
   // not happened, so this is where it happens.
@@ -233,131 +209,150 @@ export function RoomClient() {
   }
 
   const names = new Map(snapshot.peers.map((p) => [p.peerId, p.displayName]));
-  const hasCurrent = snapshot.currentTrackId !== undefined;
-  const current = snapshot.mode === 'music' ? snapshot.playlist.find((t) => t.id === snapshot.currentTrackId) : undefined;
-
+  const current =
+    snapshot.mode === 'music' ? snapshot.playlist.find((t) => t.id === snapshot.currentTrackId) : undefined;
   const self = snapshot.peers.find((p) => p.peerId === snapshot.selfPeerId);
-  const sharing = joinUrl && <ShareDialog url={joinUrl} hasPasscode={passcode !== undefined} />;
-  const togglePeople = () => setPanel((p) => (p === 'aside' ? 'main' : 'aside'));
+  const talk = snapshot.mode === 'talk';
+  const people = `${snapshot.peers.length} ${snapshot.peers.length === 1 ? 'person' : 'people'}`;
 
-  const sidebar = (
-    <>
-      <Bar className="gap-2.5">
-        <Cover title={snapshot.roomName} className="size-8 rounded-lg" />
-        <span className="truncate">{snapshot.roomName}</span>
-      </Bar>
-      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-2 pb-2">
-        {!snapshot.ended && (
-          <ModeSwitch
-            mode={snapshot.mode}
-            onChange={isCreator ? (mode) => room.setMode(mode) : undefined}
-          />
-        )}
-        <Queue
-          room={room}
-          snapshot={snapshot}
-          adding={adding}
-          addError={addError}
-          onFiles={(files) => void addTracks(files)}
-        />
-      </div>
-      {snapshot.mode === 'talk' && !snapshot.ended && (
-        <p className="mx-2 flex shrink-0 items-center gap-2 rounded-full bg-white/8 px-4 py-2 text-sm font-semibold text-chart-1">
-          <span aria-hidden className="size-2 rounded-full bg-chart-1" />
-          Talk connected
-        </p>
-      )}
-      {delayOpen && (
-        <div className="mx-2 mt-2 shrink-0 rounded-[20px] bg-white/8 p-3">
-          <OffsetSlider valueMs={userOffsetMs} onChange={changeUserOffset} />
-        </div>
-      )}
-      <div className="m-2 flex h-14 shrink-0 items-center gap-2.5 rounded-full bg-white/8 pr-2 pl-2">
+  let cta: React.ReactNode;
+  if (!snapshot.ended) {
+    if (talk) {
+      cta = (
+        <>
+          {snapshot.voice.micOn ? (
+            <Button
+              type="button"
+              size="lg"
+              className="flex-1"
+              variant={snapshot.voice.muted ? 'outline' : 'default'}
+              aria-pressed={snapshot.voice.muted}
+              onClick={() => room.setMuted(!snapshot.voice.muted)}
+            >
+              {snapshot.voice.muted ? <MicOff /> : <Mic />}
+              {snapshot.voice.muted ? 'Unmute' : 'Mute'}
+            </Button>
+          ) : (
+            <Button type="button" size="lg" className="flex-1" onClick={() => void room.enableMic()}>
+              <Mic />
+              Turn on microphone
+            </Button>
+          )}
+          <Reactions room={room} names={names} className="flex gap-1" />
+        </>
+      );
+    } else if (isCreator) {
+      cta = <Transport room={room} snapshot={snapshot} positionSeconds={positionSeconds} />;
+    } else {
+      cta = <p className="w-full text-center text-sm text-muted-foreground">The host picks what plays.</p>;
+    }
+  }
+
+  const queue = (
+    <Queue
+      room={room}
+      snapshot={snapshot}
+      adding={adding}
+      addError={addError}
+      onFiles={(files) => void addTracks(files)}
+      className="min-h-0 flex-1"
+    />
+  );
+  const modeSwitch = (
+    <ModeSwitch mode={snapshot.mode} onChange={isCreator ? (mode) => room.setMode(mode) : undefined} />
+  );
+  const audioDelay = (
+    <section aria-label="My audio delay" className="flex flex-col gap-3">
+      <p className="flex items-center gap-2.5 leading-tight">
         <Avatar name={self?.displayName ?? '?'} size="sm" />
-        <span className="flex min-w-0 flex-1 flex-col leading-tight">
+        <span className="flex min-w-0 flex-col">
           <span className="truncate text-sm font-semibold">{self?.displayName}</span>
           <span className="text-xs text-muted-foreground">{isCreator ? 'host' : 'member'}</span>
         </span>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          aria-label="My audio delay"
-          aria-expanded={delayOpen}
-          onClick={() => setDelayOpen((open) => !open)}
-        >
-          <Settings />
-        </Button>
-      </div>
-    </>
+      </p>
+      <OffsetSlider valueMs={userOffsetMs} onChange={changeUserOffset} />
+    </section>
   );
-
-  const people = (
-    <>
-      <Bar>
-        <Users className="size-5 text-muted-foreground" />
-        In the room
-      </Bar>
-      <div className="px-2 pb-2">
-        <Roster
-          peers={snapshot.peers}
-          selfPeerId={snapshot.selfPeerId}
-          connections={snapshot.connections}
-          transfers={snapshot.transfers}
-          speaking={snapshot.mode === 'talk' ? snapshot.voice.speaking : undefined}
-          selfMuted={snapshot.mode === 'talk' && snapshot.voice.micOn && snapshot.voice.muted}
-          onKick={isCreator ? (peerId) => room.kick(peerId) : undefined}
-        />
-      </div>
-    </>
-  );
-
-  const tabs = (
-    <nav aria-label="Panels" className="glass mx-2 mb-[max(0.5rem,env(safe-area-inset-bottom))] flex h-14 shrink-0 gap-1 rounded-full p-1 md:hidden">
-      {(
-        [
-          { panel: 'main', label: 'Room', Icon: Music },
-          { panel: 'sidebar', label: 'Playlist', Icon: ListMusic },
-          { panel: 'aside', label: 'People', Icon: Users },
-        ] as const
-      ).map(({ panel: value, label, Icon }) => (
-        <button
-          key={value}
-          type="button"
-          aria-current={panel === value ? 'page' : undefined}
-          onClick={() => setPanel(value)}
-          className={cn(
-            'flex flex-1 flex-col items-center justify-center gap-0.5 rounded-full text-xs font-semibold transition-[background-color,scale] duration-300 ease-soft active:scale-[0.96] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-            panel === value ? 'bg-white/16 text-foreground' : 'text-muted-foreground',
-          )}
-        >
-          <Icon className="size-5" />
-          {label}
-        </button>
-      ))}
-    </nav>
+  const peopleBody = (
+    <Roster
+      peers={snapshot.peers}
+      selfPeerId={snapshot.selfPeerId}
+      connections={snapshot.connections}
+      transfers={snapshot.transfers}
+      speaking={talk ? snapshot.voice.speaking : undefined}
+      selfMuted={talk && snapshot.voice.micOn && snapshot.voice.muted}
+      onKick={isCreator ? (peerId) => room.kick(peerId) : undefined}
+    />
   );
 
   return (
     <Shell
       backdrop={
         <SpeakerBackdrop
-          talk={snapshot.mode === 'talk'}
+          talk={talk}
           speaker={[...snapshot.voice.speaking].map((id) => names.get(id)).find(Boolean)}
           fallback={current?.title ?? snapshot.roomName}
           art={current?.art}
           idle={!(snapshot.mode === 'music' && snapshot.playing)}
         />
       }
-      sidebar={sidebar}
-      aside={people}
-      panel={panel}
-      footer={
+      header={
+        <Header
+          back="/"
+          title={snapshot.code}
+          actions={joinUrl && <ShareDialog url={joinUrl} code={snapshot.code} hasPasscode={passcode !== undefined} />}
+        />
+      }
+      cta={cta}
+      fit={wide && !talk && !snapshot.ended}
+      aside={
         <>
-          {snapshot.mode === 'music' && !snapshot.ended && hasCurrent && !stageVisible && (
-            <MiniPlayer room={room} snapshot={snapshot} positionSeconds={positionSeconds} />
+          <section className="flex flex-col gap-3">
+            <div className="flex items-center gap-3">
+              <p className="plunk block-lime mr-[3px] mb-[3px] px-3 py-1 font-display text-2xl leading-none tracking-wider">
+                <span className="sr-only">Room code </span>
+                {snapshot.code}
+              </p>
+              <Tag tone={talk ? 'talk' : 'music'}>{talk ? 'Talk' : 'Music'}</Tag>
+              {isCreator && <Tag tone="host">Host</Tag>}
+            </div>
+            <h1 className="font-display text-[2rem] leading-[0.95] lg:text-[2.5rem] tracking-tight break-words">
+              {snapshot.roomName}
+            </h1>
+            <p className="text-muted-foreground">
+              {people}
+              {snapshot.description && ` · ${snapshot.description}`}
+            </p>
+          </section>
+          {!snapshot.ended && (
+            <>
+              {/* Plunk edges sit outside the tile, hence the right margin. */}
+              <div className="grid grid-cols-2 gap-5 pr-(--plunk) pb-(--plunk) lg:hidden">
+                <button type="button" className={cn(TILE, 'block-yellow')} onClick={() => setSheet('playlist')}>
+                  <ListMusic className="size-5" />
+                  {talk ? 'Settings' : 'Playlist'}
+                  <span className="font-display text-2xl">{talk ? '·' : snapshot.playlist.length}</span>
+                </button>
+                <button type="button" className={cn(TILE, 'block-pink')} onClick={() => setSheet('people')}>
+                  <Users className="size-5" />
+                  People
+                  <span className="font-display text-2xl">{snapshot.peers.length}</span>
+                </button>
+              </div>
+            </>
           )}
-          {tabs}
+          {wide && !snapshot.ended && (
+            <>
+              <section aria-label="In the room" className="flat flex flex-col gap-4 p-5">
+                <h2 className="text-[0.8125rem] font-extrabold tracking-wide uppercase">In the room</h2>
+                {peopleBody}
+              </section>
+              <div className="flat flex flex-col gap-4 p-5">
+                {modeSwitch}
+                {audioDelay}
+              </div>
+            </>
+          )}
         </>
       }
     >
@@ -370,109 +365,86 @@ export function RoomClient() {
           isCreator={isCreator}
         />
       )}
-      <TopBar>
-        {snapshot.mode === 'talk' ? (
-          <Mic className="size-5 shrink-0 text-muted-foreground" />
-        ) : (
-          <Music className="size-5 shrink-0 text-muted-foreground" />
-        )}
-        <h1 className="truncate">{snapshot.roomName}</h1>
-        {snapshot.description && (
-          <p className="hidden min-w-0 truncate border-l border-white/20 pl-3 text-sm font-normal text-muted-foreground sm:block">
-            {snapshot.description}
-          </p>
-        )}
-        <span className="ml-auto flex items-center">
-          {sharing}
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="hidden md:inline-flex xl:hidden"
-            aria-label="Show people"
-            aria-pressed={panel === 'aside'}
-            onClick={togglePeople}
-          >
-            <Users />
-          </Button>
-        </span>
-      </TopBar>
 
       {snapshot.ended ? (
         // The roster behind this has no socket keeping it true, so it goes
         // rather than sitting there looking live next to the bad news.
-        <div className={cn(CARD, 'mt-2 max-w-md animate-pop items-start')}>
-          <DoorOpen className="size-8 text-destructive" />
-          <p role="alert" className="text-lg font-semibold">
+        <div className={cn(CARD, 'plunk block-pink mr-[3px] mb-[3px] animate-pop items-start')}>
+          <DoorOpen className="size-14" />
+          <p role="alert" className="font-display text-3xl leading-tight">
             {ENDED_MESSAGE[snapshot.ended]}
           </p>
-          <Link href="/" className={buttonVariants({ variant: 'outline' })}>
+          <Link
+            href="/"
+            className={buttonVariants({
+              variant: 'outline',
+              className: 'border-background bg-transparent text-background hover:bg-background/15',
+            })}
+          >
             <ArrowLeft />
             Back to rooms
           </Link>
         </div>
-      ) : snapshot.mode === 'talk' ? (
-        <div className="flex flex-1 flex-col gap-4 pb-4">
-          <TalkPanel voice={snapshot.voice} people={snapshot.peers.length} />
-          <TalkGrid
-            peers={snapshot.peers}
-            selfPeerId={snapshot.selfPeerId}
-            connections={snapshot.connections}
-            speaking={snapshot.voice.speaking}
-            selfMuted={snapshot.voice.micOn && snapshot.voice.muted}
-            onKick={isCreator ? (peerId) => room.kick(peerId) : undefined}
-          />
-          <div className="glass sticky bottom-3 z-30 mx-auto mt-auto flex max-w-xl flex-wrap items-center justify-center gap-3 rounded-full p-2">
-            {snapshot.voice.micOn ? (
-              <Button
-                type="button"
-                size="lg"
-                variant={snapshot.voice.muted ? 'outline' : 'default'}
-                aria-pressed={snapshot.voice.muted}
-                onClick={() => room.setMuted(!snapshot.voice.muted)}
-              >
-                {snapshot.voice.muted ? <MicOff /> : <Mic />}
-                {snapshot.voice.muted ? 'Unmute' : 'Mute'}
-              </Button>
-            ) : (
-              <Button type="button" size="lg" onClick={() => void room.enableMic()}>
-                <Mic />
-                Turn on microphone
-              </Button>
-            )}
-            <Reactions room={room} names={names} className="flex gap-1" />
-          </div>
-        </div>
       ) : (
-        <div
-          className={cn(
-            'relative mb-4 flex min-w-0 flex-col gap-4 rounded-[28px] transition-shadow',
-            dragging && 'ring-4 ring-primary ring-offset-4 ring-offset-background',
+        <>
+          {talk ? (
+            <>
+              <TalkPanel voice={snapshot.voice} people={snapshot.peers.length} />
+              <TalkGrid
+                peers={snapshot.peers}
+                selfPeerId={snapshot.selfPeerId}
+                connections={snapshot.connections}
+                speaking={snapshot.voice.speaking}
+                selfMuted={snapshot.voice.micOn && snapshot.voice.muted}
+                onKick={isCreator ? (peerId) => room.kick(peerId) : undefined}
+              />
+              {snapshot.peers.length === 1 && (
+                <p className="flat p-4 font-semibold">
+                  Waiting for others. Share the link or the code {snapshot.code}.
+                </p>
+              )}
+            </>
+          ) : (
+            <div
+              className={cn(
+                'relative flex min-w-0 shrink-0 flex-col gap-4 transition-shadow',
+                dragging && 'ring-4 ring-primary ring-offset-4 ring-offset-background',
+              )}
+              onDragOver={(e) => {
+                if (!isCreator || !e.dataTransfer.types.includes('Files')) return;
+                e.preventDefault();
+                setDragging(true);
+              }}
+              onDragLeave={(e) => {
+                if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false);
+              }}
+              onDrop={(e) => {
+                if (!isCreator) return;
+                e.preventDefault();
+                setDragging(false);
+                void addTracks(e.dataTransfer.files);
+              }}
+            >
+              <Stage compact={wide} room={room} snapshot={snapshot} positionSeconds={positionSeconds} />
+            </div>
           )}
-          onDragOver={(e) => {
-            if (!isCreator || !e.dataTransfer.types.includes('Files')) return;
-            e.preventDefault();
-            setDragging(true);
-          }}
-          onDragLeave={(e) => {
-            if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false);
-          }}
-          onDrop={(e) => {
-            if (!isCreator) return;
-            e.preventDefault();
-            setDragging(false);
-            void addTracks(e.dataTransfer.files);
-          }}
-        >
-          <Stage
-            room={room}
-            snapshot={snapshot}
-            positionSeconds={positionSeconds}
-            visuals={visuals}
-            onVisuals={changeVisuals}
-            sectionRef={stage}
-          />
-        </div>
+
+          {wide && !talk && <div className="flat flex min-h-0 flex-1 flex-col p-5">{queue}</div>}
+          {!wide && (
+            <>
+              <Sheet title={talk ? 'Settings' : 'Playlist'} open={sheet === 'playlist'} onClose={closeSheet}>
+                <div className="flex flex-col gap-4">
+                  {modeSwitch}
+                  {!talk && queue}
+                  {audioDelay}
+                </div>
+              </Sheet>
+              <Sheet title="In the room" open={sheet === 'people'} onClose={closeSheet}>
+                {peopleBody}
+              </Sheet>
+            </>
+          )}
+        </>
       )}
 
       {/* Everyone else's voice. Rendered whatever the mode shows, so a
@@ -484,7 +456,10 @@ export function RoomClient() {
   );
 }
 
-const CARD = 'panel flex flex-col gap-4 rounded-[20px] p-5 text-card-foreground sm:p-6';
+const TILE =
+  'plunk plunk-press flex h-14 items-center justify-center gap-2 text-[0.8125rem] font-extrabold tracking-wide uppercase focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
+
+const CARD = 'flat flex flex-col gap-4 p-5 text-card-foreground sm:p-6';
 
 const ENDED_MESSAGE: Record<Ended, string> = {
   'creator-left': 'This room has ended. The person who created it left.',
@@ -502,26 +477,35 @@ function ModeSwitch({ mode, onChange }: { mode: Mode; onChange?: (mode: Mode) =>
   if (!onChange) {
     const { label, Icon } = modes.find((m) => m.mode === mode)!;
     return (
-      <p className="flex h-11 items-center gap-2 rounded-full bg-white/12 px-4 text-[0.9375rem] font-semibold text-foreground">
+      <p
+        className={cn(
+          'plunk mr-[3px] mb-[3px] flex h-11 items-center gap-2 px-4 text-[0.9375rem] font-extrabold uppercase',
+          mode === 'talk' ? 'block-pink' : 'block-yellow',
+        )}
+      >
         <Icon className="size-5" />
         {label} mode
       </p>
     );
   }
   return (
-    <div role="group" aria-label="Room mode" className="flex flex-col gap-0.5">
+    <div role="group" aria-label="Room mode" className="grid grid-cols-2 gap-4 pr-(--plunk) pb-(--plunk)">
       {modes.map(({ mode: value, label, Icon }) => (
-        <Button
+        <button
           key={value}
           type="button"
-          variant={mode === value ? 'secondary' : 'ghost'}
-          className={cn('justify-start', mode === value && 'text-accent-foreground')}
           aria-pressed={mode === value}
           onClick={() => onChange(value)}
+          className={cn(
+            'plunk plunk-press flex h-12 items-center justify-center gap-2 text-sm font-extrabold uppercase focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+            value === 'talk' ? 'block-pink' : 'block-yellow',
+            mode !== value && 'opacity-50',
+            mode === value && 'translate-x-[3px] translate-y-[3px] [&::after]:hidden [&::before]:hidden',
+          )}
         >
-          <Icon />
+          <Icon className="size-5" />
           {label}
-        </Button>
+        </button>
       ))}
     </div>
   );
@@ -534,13 +518,18 @@ const COMFORTABLE_PEOPLE = 8;
 function TalkPanel({ voice, people }: { voice: VoiceState; people: number }) {
   return (
     <section className="flex animate-rise flex-col gap-2 text-sm text-muted-foreground">
+      <p
+        aria-live="polite"
+        className={cn(
+          'plunk mr-[3px] mb-[3px] p-4 font-display text-3xl leading-none uppercase',
+          voice.micOn && !voice.muted ? 'block-green' : 'flat border-2 text-foreground',
+        )}
+      >
+        {voice.micOn ? (voice.muted ? 'You are muted' : 'You are live') : 'Listening only'}
+      </p>
       <p className="flex items-start gap-2">
         <Headphones className="mt-0.5 size-5 shrink-0" />
-        Everyone in this room can hear everyone else. Use headphones: speakers next to an open
-        microphone feed back.
-      </p>
-      <p aria-live="polite" className="font-medium text-foreground">
-        {voice.micOn ? (voice.muted ? 'You are muted.' : 'You are live.') : 'You can listen without a microphone.'}
+        Everyone in this room can hear everyone else. Use headphones: speakers next to an open microphone feed back.
       </p>
       {voice.error && (
         <p role="alert" className="text-sm font-medium text-destructive">
@@ -548,9 +537,7 @@ function TalkPanel({ voice, people }: { voice: VoiceState; people: number }) {
         </p>
       )}
       {people > COMFORTABLE_PEOPLE && (
-        <p>
-          Voice works best with {COMFORTABLE_PEOPLE} people or fewer. Larger rooms may stutter.
-        </p>
+        <p>Voice works best with {COMFORTABLE_PEOPLE} people or fewer. Larger rooms may stutter.</p>
       )}
     </section>
   );

@@ -70,23 +70,31 @@ _Avoid_: Hold, disable
 ## On screen
 
 **Stage**:
-Music mode's main tile: the current track's cover with a ring of bars that move with the sound, its title, how far through it is, and the creator's controls. The room around it is lit by the **Backdrop**; the tile itself is a plain surface, not **Glass**.
+Music mode's main tile: the current track's cover with a ring of bars that move with the sound, its title, how far through it is, and the creator's controls. The room around it is lit by the **Backdrop**; the tile itself is a flat surface.
 _Avoid_: Player, now-playing card
 
 **Cover**:
 A track's picture: the one inside its file when it has one (MP3, M4A or FLAC), otherwise one generated from its title, so the same title looks the same on every device. A room's card gets a cover generated from its name.
 _Avoid_: Artwork, thumbnail, album art (in code; they are fine in prose)
 
-**Glass**:
-The translucent layer used for navigation and controls: the sidebar, the bars, the player capsule, dialogs. It blurs what is behind it and is never used for content, which is a plain tinted surface; glass does not sit on glass. An approximation of Apple's Liquid Glass, not the material itself.
-_Avoid_: Frosted, blur (in the UI)
+**Sheet**:
+A panel that rises from the bottom of a phone screen: the playlist and the people each open in one. On a wide screen they are panels in the page instead.
+_Avoid_: drawer, modal
+
+**CTA bar**:
+The bar stuck to the bottom of a screen that holds its one main action: Create room, Join room, or the host's transport.
+_Avoid_: footer, toolbar
+
+**Plunk**:
+NeoPOP's raised edge: a face with two solid 3px edges (right and bottom) skewed 45 degrees so it reads as extruded. Used on buttons and the floating bars; pressing it sinks the face into its edges, and a disabled one has none. Content uses a flat hairline surface instead. Drawn outside its box, so it cannot sit inside `overflow-hidden`.
+_Avoid_: Shadow, elevation, 3D
 
 **Backdrop**:
-The blurred, slowly turning colour behind the whole window, made from four copies of the current cover (or, with none, the room's own). The glass panels sit on it. It crossfades when the track changes and holds still when nothing is playing or the system asks for less motion.
+The colour behind the whole window: one dimmed, unblurred block of the current cover (or, with none, the room's own). The panels sit on it. It crossfades when the track changes.
 _Avoid_: Background, wallpaper
 
 **Visuals**:
-The moving ring of bars around the cover. Drawn on each device from the audio it is playing, so it stays in step without anything being sent. A person can switch it off, and it starts off for anyone who asked their system for less motion.
+The moving ring of bars around the cover. Drawn on each device from the audio it is playing, so it stays in step without anything being sent. It is always on, except for anyone who asked their system for less motion.
 _Avoid_: Visualizer (in the UI)
 
 **Reaction**:
@@ -136,6 +144,18 @@ _Avoid_: Delay, latency setting
 **Drift**:
 How far a device's playback has slipped from where the cue and the clock offset say it should be; positive means ahead. Checked every ten seconds while a track plays: a little is nudged out through playback rate, a lot is reseeked.
 _Avoid_: Lag, desync
+
+**Tag**:
+A small uppercase label on a coloured or outlined chip: Live, Host, Locked, Music, Talk, Ready.
+_Avoid_: Badge, pill
+
+**Colour face**:
+A solid lime, green, yellow or pink surface with black text and darker edges, used for headlines and actions; content stays on flat dark boxes.
+_Avoid_: Card colour
+
+**Marquee**:
+The scrolling pink strip on Home that reads the live room and listener counts. Read once by screen readers; the repeat is hidden.
+_Avoid_: Ticker, banner
 
 ## Flagged ambiguities
 

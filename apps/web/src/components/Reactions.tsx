@@ -16,6 +16,8 @@ const REACTIONS: { reaction: Reaction; label: string; Icon: LucideIcon }[] = [
   { reaction: 'laugh', label: 'Laugh', Icon: Laugh },
 ];
 
+const FACES = ['block-pink', 'block-yellow', 'block-green', 'block-lime'];
+
 /** More than this at once is a smear, and a lot of layers for a phone. */
 const MAX_FLOATING = 24;
 
@@ -73,12 +75,13 @@ export function Reactions({
   return (
     <>
       <div role="group" aria-label="Reactions" className={className ?? 'flex flex-wrap gap-2'}>
-        {REACTIONS.map(({ reaction, label, Icon }) => (
+        {REACTIONS.map(({ reaction, label, Icon }, i) => (
           <Button
             key={reaction}
             type="button"
             variant="outline"
             size="icon"
+            className={`plunk mr-[3px] mb-[3px] border-0 text-background hover:text-background ${FACES[i % FACES.length]}`}
             aria-label={label}
             onClick={() => {
               const now = Date.now();
@@ -95,7 +98,7 @@ export function Reactions({
         {said}
       </p>
       {/* Over everything, under every tap: the layer never takes a click. In
-          the document body, not here: this component sits inside a glass bar,
+          the document body, not here: this component sits inside a plunked bar,
           and a backdrop-filter makes its element the containing block of
           anything fixed inside it, which would clip the icons to the bar. */}
       {createPortal(
@@ -106,7 +109,7 @@ export function Reactions({
               <Icon
                 key={id}
                 onAnimationEnd={() => setFloating((all) => all.filter((f) => f.id !== id))}
-                className="absolute bottom-0 size-9 animate-float-up fill-chart-1/30 text-chart-1"
+                className="absolute bottom-0 size-9 animate-float-up fill-ring/30 text-ring"
                 style={{ left: `${at}%` }}
               />
             );

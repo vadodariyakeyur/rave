@@ -1,9 +1,9 @@
 'use client';
 
-import type { Ref } from 'react';
-import { Activity, Disc3, LoaderCircle, Pause, Play, RotateCcw, Square, Upload } from 'lucide-react';
+import { Disc3, LoaderCircle, Pause, Play, RotateCcw, Square } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Cover, glowOf } from '@/components/Cover';
+import { Tag } from '@/components/Tag';
 import { Reactions } from '@/components/Reactions';
 import { TrackProgress } from '@/components/TrackProgress';
 import { Visualizer } from '@/components/Visualizer';
@@ -22,16 +22,13 @@ export function Stage({
   room,
   snapshot,
   positionSeconds,
-  visuals,
-  onVisuals,
-  sectionRef,
+  compact,
 }: {
   room: LiveRoom;
   snapshot: RoomSnapshot;
   positionSeconds: number;
-  visuals: boolean;
-  onVisuals: (on: boolean) => void;
-  sectionRef: Ref<HTMLElement>;
+  /** Cover beside the text, so the stage is short enough to leave room for the playlist. */
+  compact?: boolean;
 }) {
   const { isCreator, playing, playlist } = snapshot;
   const index = playlist.findIndex((t) => t.id === snapshot.currentTrackId);
@@ -43,57 +40,55 @@ export function Stage({
 
   return (
     <section
-      ref={sectionRef}
       aria-label="Now playing"
-      className="panel relative isolate animate-rise overflow-hidden rounded-[28px] p-5 text-card-foreground sm:p-8"
+      className="flat relative isolate animate-rise overflow-hidden p-5 text-card-foreground"
+      style={{
+        backgroundImage: `linear-gradient(160deg, color-mix(in oklch, ${glow0} 28%, transparent), transparent 70%)`,
+      }}
     >
-      <div className="grid items-center gap-6 sm:grid-cols-[auto_1fr] sm:gap-10">
+      <div className={cn('flex gap-6', compact ? 'items-center' : 'flex-col')}>
         <div
           className={cn(
             // Paused, the cover steps back a little; playing, it comes forward.
-            'relative mx-auto aspect-square w-[min(100%,20rem)] transition-transform duration-700 ease-spring sm:w-80',
+            'relative aspect-square transition-transform duration-700 ease-spring',
+            compact ? 'w-48 shrink-0' : 'mx-auto w-full max-w-80',
             playing ? 'scale-100' : 'scale-[0.92]',
           )}
-          style={{ '--halo': current ? `color-mix(in oklch, ${glow0} 55%, transparent)` : 'transparent' } as React.CSSProperties}
+          style={
+            {
+              '--halo': current ? `color-mix(in oklch, ${glow0} 55%, transparent)` : 'transparent',
+            } as React.CSSProperties
+          }
         >
-          <Visualizer
-            room={room}
-            active={visuals && playing}
-            color={glow0}
-            className="absolute inset-0 size-full"
-          />
+          <Visualizer room={room} active={playing} color={glow0} className="absolute inset-0 size-full" />
           <Cover
             title={current?.title}
             art={current?.art}
             className={cn(
-              'absolute inset-[15%] rounded-full shadow-[0_0_80px_var(--halo)] ring-4 ring-card',
+              'absolute inset-[15%] rounded-none shadow-[0_0_80px_var(--halo)] ring-4 ring-card',
               !current && 'border-2 border-dashed border-white/25',
             )}
           />
         </div>
 
-        <div className="flex min-w-0 flex-col gap-5">
+        <div className={cn('flex min-w-0 flex-col', compact ? 'flex-1 gap-3' : 'gap-5')}>
           <div className="flex items-center justify-between gap-3">
             <p className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
               <Disc3 className={cn('size-4', playing && 'animate-spin [animation-duration:2.4s]')} />
               Now playing
+              {playing && <Tag tone="live">Live</Tag>}
             </p>
-            <Button
-              type="button"
-              variant={visuals ? 'secondary' : 'ghost'}
-              size="sm"
-              aria-pressed={visuals}
-              onClick={() => onVisuals(!visuals)}
-            >
-              <Activity />
-              Visuals
-            </Button>
           </div>
 
           {current ? (
             <>
               <div className="flex flex-col gap-1">
-                <h2 className="line-clamp-2 text-4xl leading-[1.05] font-bold tracking-tight break-words sm:text-5xl">
+                <h2
+                  className={cn(
+                    'font-display leading-[1] tracking-tight break-words',
+                    compact ? 'line-clamp-1 text-[1.75rem]' : 'line-clamp-2 text-[2.25rem]',
+                  )}
+                >
                   {current.title}
                 </h2>
                 <p className="text-muted-foreground">
@@ -102,63 +97,66 @@ export function Stage({
               </div>
               {/* Shown to listeners too: it is the only sign a member has
                   that their silent device is in fact playing. */}
-              {snapshot.currentDuration !== undefined ? (
-                <TrackProgress
-                  positionSeconds={positionSeconds}
-                  durationSeconds={snapshot.currentDuration}
-                  playing={playing}
-                />
-              ) : (
+              <TrackProgress
+                positionSeconds={positionSeconds}
+                durationSeconds={snapshot.currentDuration ?? 0}
+                playing={playing}
+              />
+              {snapshot.currentDuration === undefined && (
                 <p className="flex items-center gap-2 text-sm text-muted-foreground">
                   <LoaderCircle className="size-4 animate-spin" />
                   {current.state === 'ready' ? 'Getting ready…' : 'Still downloading this track…'}
                 </p>
               )}
-              {isCreator && (
-                <div className="flex items-center gap-1">
-                  <Button type="button" variant="ghost" size="icon" className="size-12" onClick={() => room.restart()}>
-                    <RotateCcw />
-                    <span className="sr-only">Restart</span>
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="size-16 text-foreground [&_svg]:size-9"
-                    disabled={snapshot.currentDuration === undefined}
-                    onClick={() => (playing ? room.pause() : room.resume())}
-                  >
-                    {playing ? <Pause className="fill-current" /> : <Play className="fill-current" />}
-                    <span className="sr-only">
-                      {playing ? 'Pause' : positionSeconds > 0 ? 'Resume' : 'Play'}
-                    </span>
-                  </Button>
-                  <Button type="button" variant="ghost" size="icon" className="size-12" onClick={() => room.stop()}>
-                    <Square />
-                    <span className="sr-only">Stop</span>
-                  </Button>
-                </div>
-              )}
             </>
           ) : (
             <>
-              <h2 className="text-4xl leading-[1.05] font-bold tracking-tight sm:text-5xl">Nothing playing yet</h2>
-              {isCreator ? (
-                <label
-                  htmlFor="add-tracks"
-                  className="flex cursor-pointer items-center gap-3 rounded-[20px] border-2 border-dashed border-white/25 bg-white/5 p-4 text-muted-foreground transition-colors duration-300 hover:border-ring hover:text-foreground"
-                >
-                  <Upload className="size-6 shrink-0 text-ring" />
-                  Drop audio files here, or tap to choose. Then press play on a track.
-                </label>
-              ) : (
-                <p className="text-muted-foreground">The host picks what plays. Stay close.</p>
-              )}
+              <h2 className="font-display text-[2.25rem] leading-[1] tracking-tight">Nothing playing yet</h2>
+              {!isCreator && <p className="text-muted-foreground">The host picks what plays. Stay close.</p>}
+              <TrackProgress positionSeconds={0} durationSeconds={0} playing={false} />
             </>
           )}
           <Reactions room={room} names={names} />
         </div>
       </div>
     </section>
+  );
+}
+
+/**
+ * The creator's restart, play/pause and stop. Lives in the room's call-to-
+ * action bar, so it stays in reach however far the page is scrolled.
+ */
+export function Transport({
+  room,
+  snapshot,
+  positionSeconds,
+}: {
+  room: LiveRoom;
+  snapshot: RoomSnapshot;
+  positionSeconds: number;
+}) {
+  const { playing } = snapshot;
+  return (
+    <div className="flex w-full items-center justify-center gap-3">
+      <Button type="button" variant="outline" size="icon" onClick={() => room.restart()}>
+        <RotateCcw />
+        <span className="sr-only">Restart</span>
+      </Button>
+      <Button
+        type="button"
+        size="lg"
+        className="flex-1"
+        disabled={snapshot.currentDuration === undefined}
+        onClick={() => (playing ? room.pause() : room.resume())}
+      >
+        {playing ? <Pause className="fill-current" /> : <Play className="fill-current" />}
+        {playing ? 'Pause' : positionSeconds > 0 ? 'Resume' : 'Play'}
+      </Button>
+      <Button type="button" variant="outline" size="icon" onClick={() => room.stop()}>
+        <Square />
+        <span className="sr-only">Stop</span>
+      </Button>
+    </div>
   );
 }

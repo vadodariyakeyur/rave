@@ -23,7 +23,7 @@ export function SpeakerBackdrop({
   speaker?: string;
   fallback: string;
   art?: TrackArt;
-  /** Nothing is playing: little colour, and the light holds still. */
+  /** Nothing is playing: little colour,. */
   idle: boolean;
 }) {
   const [held, setHeld] = useState<string>();
@@ -38,7 +38,6 @@ export function SpeakerBackdrop({
     <Backdrop
       title={spoke ? held : fallback}
       art={talk ? undefined : art}
-      still={idle && !spoke}
       calm={idle && !spoke}
     />
   );

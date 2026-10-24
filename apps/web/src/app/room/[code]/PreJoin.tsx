@@ -2,13 +2,14 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, ArrowRight, LoaderCircle, Lock } from 'lucide-react';
+import { ArrowRight, LoaderCircle, Lock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { decodePasscode } from '@/lib/passcode';
 import { Backdrop } from '@/components/Backdrop';
+import { Tag } from '@/components/Tag';
 import { RoomPreview } from '@/components/RoomPreview';
-import { Shell, TopBar } from '@/components/Shell';
+import { Header, Shell } from '@/components/Shell';
 import { joinRoom } from '@/lib/session';
 import { EnterRefused, Signaling } from '@/lib/signaling';
 import type { RoomSummary } from '@rave/protocol';
@@ -20,6 +21,14 @@ import type { RoomSummary } from '@rave/protocol';
  * browser, so the passcode does not land in the web server's logs. Encoded,
  * so it is not readable on sight (see lib/passcode.ts).
  */
+function rememberedName(): string {
+  try {
+    return localStorage.getItem('rave:name') ?? '';
+  } catch {
+    return '';
+  }
+}
+
 function linkedPasscode(): string | undefined {
   const encoded = new URLSearchParams(window.location.hash.slice(1)).get('p');
   return encoded === null ? undefined : decodePasscode(encoded);
@@ -37,6 +46,9 @@ function linkedPasscode(): string | undefined {
  */
 export function PreJoin({ code, locked }: { code: string; locked: boolean }) {
   const [displayName, setDisplayName] = useState('');
+  // After mount, so the server's empty field and the first client render agree.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => setDisplayName((name) => name || rememberedName()), []);
   const [passcode, setPasscode] = useState('');
   // Asked for up front when the room list said so; otherwise only once the
   // server says the room needs one, or that the one a link carried is wrong.
@@ -63,6 +75,9 @@ export function PreJoin({ code, locked }: { code: string; locked: boolean }) {
     try {
       // Must stay synchronous up to here: joinRoom opens the AudioContext,
       // and this submit is the user gesture that lets it start.
+      try {
+        localStorage.setItem('rave:name', displayName.trim());
+      } catch {}
       await joinRoom({
         code,
         displayName: displayName.trim(),
@@ -78,18 +93,43 @@ export function PreJoin({ code, locked }: { code: string; locked: boolean }) {
   }
 
   return (
-    <Shell backdrop={<Backdrop title={room?.roomName ?? 'party'} still calm />}>
-      <TopBar>
-        <Link href="/" aria-label="Back to rooms" className="flex size-10 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-white/12 hover:text-foreground">
-          <ArrowLeft className="size-5" />
-        </Link>
-        Join a room
-      </TopBar>
-      <div className="grid flex-1 place-items-start justify-items-center p-4 sm:p-8">
-      <div className="flex w-full max-w-110 animate-rise flex-col gap-6 rounded-[28px] glass p-6 text-card-foreground">
-        <h1 className="text-3xl font-bold tracking-tight">Join the room</h1>
-        {room && (
-          <div>
+    <Shell
+      backdrop={<Backdrop title={room?.roomName ?? 'party'} calm />}
+      header={<Header back="/" title="Join a room" />}
+      cta={
+        <Button
+          type="submit"
+          form="join-form"
+          size="lg"
+          disabled={displayName.trim() === '' || joining}
+          className="w-full"
+        >
+          {joining ? <LoaderCircle className="animate-spin" /> : <ArrowRight />}
+          {joining ? 'Joining…' : 'Join room'}
+        </Button>
+      }
+      aside={
+        <>
+          <section className="plunk block-lime mr-[3px] mb-[3px] flex animate-rise flex-col gap-2 p-5">
+            <h1 className="font-display text-[2rem] leading-[0.95] tracking-tight lg:text-[2.75rem]">
+              {room ? room.roomName : 'Join the room'}
+            </h1>
+            <div className="flex flex-wrap items-center gap-2">
+              <Tag tone="host" className="font-mono">
+                {code}
+              </Tag>
+              {room && (
+                <Tag tone={room.mode === 'talk' ? 'talk' : 'music'}>{room.mode === 'talk' ? 'Talk' : 'Music'}</Tag>
+              )}
+              {(room?.hasPasscode ?? locked) && <Tag tone="locked">Locked</Tag>}
+              {room && (
+                <span className="font-display text-xl">
+                  {room.memberCount} {room.memberCount === 1 ? 'person' : 'people'} inside
+                </span>
+              )}
+            </div>
+          </section>
+          {room && (
             <RoomPreview
               name={room.roomName}
               description={room.description}
@@ -98,12 +138,20 @@ export function PreJoin({ code, locked }: { code: string; locked: boolean }) {
               hasPasscode={room.hasPasscode}
               nowPlaying={room.nowPlaying}
             />
-          </div>
-        )}
-
-        <form onSubmit={join} className="flex flex-col gap-5">
-          <div className="flex flex-col gap-2">
-            <label htmlFor="display-name" className="text-sm font-semibold text-muted-foreground">
+          )}
+        </>
+      }
+    >
+      <form id="join-form" onSubmit={join} className="flex flex-col gap-3">
+        <div className="flat flex items-start gap-4 p-4 focus-within:border-ring">
+          <span
+            aria-hidden
+            className="font-display text-4xl leading-none text-transparent [-webkit-text-stroke:1px_var(--color-ring)]"
+          >
+            01
+          </span>
+          <div className="flex min-w-0 flex-1 flex-col gap-2">
+            <label htmlFor="display-name" className="text-[0.8125rem] font-extrabold tracking-wide text-ring uppercase">
               Your name
             </label>
             <Input
@@ -114,10 +162,21 @@ export function PreJoin({ code, locked }: { code: string; locked: boolean }) {
               autoComplete="off"
             />
           </div>
+        </div>
 
-          {askPasscode && (
-            <div className="flex animate-pop flex-col gap-2">
-              <label htmlFor="passcode" className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground">
+        {askPasscode && (
+          <div className="flat flex animate-pop items-start gap-4 p-4 focus-within:border-ring">
+            <span
+              aria-hidden
+              className="font-display text-4xl leading-none text-transparent [-webkit-text-stroke:1px_var(--color-ring)]"
+            >
+              02
+            </span>
+            <div className="flex min-w-0 flex-1 flex-col gap-2">
+              <label
+                htmlFor="passcode"
+                className="flex items-center gap-1.5 text-[0.8125rem] font-extrabold tracking-wide text-ring uppercase"
+              >
                 <Lock className="size-4" />
                 Room passcode
               </label>
@@ -129,21 +188,20 @@ export function PreJoin({ code, locked }: { code: string; locked: boolean }) {
                 autoComplete="off"
               />
             </div>
-          )}
+          </div>
+        )}
 
-          {error && (
-            <p role="alert" className="text-sm font-medium text-destructive">
-              {error}
-            </p>
-          )}
+        <p className="text-sm text-muted-foreground">Audio starts on this device when you join.</p>
 
-          <Button type="submit" size="lg" disabled={displayName.trim() === '' || joining}>
-            {joining ? <LoaderCircle className="animate-spin" /> : <ArrowRight />}
-            {joining ? 'Joining…' : 'Join room'}
-          </Button>
-        </form>
-      </div>
-      </div>
+        {error && (
+          <p role="alert" className="text-sm font-medium text-destructive">
+            {error}{' '}
+            <Link href="/" className="underline">
+              Back to rooms
+            </Link>
+          </p>
+        )}
+      </form>
     </Shell>
   );
 }
