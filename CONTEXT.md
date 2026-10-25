@@ -164,8 +164,8 @@ its code and shows it, so a person sees what they are about to join.
 - A start is not simultaneous by construction: a device that does not yet hold or has not yet
   decoded the track comes in late, in sync (ADR 0001, ADR 0003).
 - Voice is a connection per pair of people, so large talk rooms strain phones (ADR 0004).
-- Only a STUN server is configured; there is no TURN, so peers that cannot reach each other
-  directly cannot join the mesh. `ICE_SERVERS` takes URLs only, which cannot carry TURN
-  credentials ([ice.ts](apps/realtime/src/ice.ts)).
+- TURN is only available through Cloudflare credentials (`CF_TURN_KEY_ID`, `CF_TURN_API_TOKEN`).
+  Without them only STUN from `ICE_SERVERS` is used, so peers that cannot reach each other
+  directly cannot join the mesh ([ice.ts](apps/realtime/src/ice.ts)).
 - Bluetooth output delay cannot be measured by the browser; the user offset slider is the
   only correction.
