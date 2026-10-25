@@ -64,7 +64,7 @@ export function Queue({
       </div>
 
       {playlist.length > 0 && (
-        <ol className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto">
+        <ol className="flex min-h-28 flex-1 flex-col gap-0.5 overflow-y-auto">
           {playlist.map((track, index) => {
             const isCurrent = track.id === snapshot.currentTrackId;
             return (

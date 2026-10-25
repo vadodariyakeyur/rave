@@ -304,7 +304,6 @@ export function RoomClient() {
         />
       }
       cta={cta}
-      fit={wide && !talk && !snapshot.ended}
       aside={
         <>
           <section className="flex flex-col gap-3">

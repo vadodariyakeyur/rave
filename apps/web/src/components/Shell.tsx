@@ -38,7 +38,6 @@ export function Shell({
   backdrop,
   aside,
   banner,
-  fit,
   children,
 }: {
   header: ReactNode;
@@ -50,8 +49,6 @@ export function Shell({
   cta?: ReactNode;
   /** Colour behind the column; a <Backdrop />. */
   backdrop?: ReactNode;
-  /** Wide screens: the content column does not scroll; its children size themselves to fit it. */
-  fit?: boolean;
   children: ReactNode;
 }) {
   return (
@@ -74,7 +71,7 @@ export function Shell({
       >
         {aside && <div className={COLUMN}>{aside}</div>}
         <div
-          className={cn(COLUMN, fit && 'lg:overflow-hidden', !aside && 'lg:place-self-center lg:w-full lg:max-w-160')}
+          className={cn(COLUMN, !aside && 'lg:place-self-center lg:w-full lg:max-w-160')}
         >
           {children}
         </div>
