@@ -9,12 +9,7 @@ DEV_COMPOSE := $(COMPOSE) -f docker-compose.yml -f docker-compose.dev.yml
 # not loopback. Linux falls back to `hostname -I`.
 LAN_IP := $(shell ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || hostname -I 2>/dev/null | awk '{print $$1}')
 
-# The dashboard itself, not Grafana's home page. `make metrics` is for looking
-# at the room's sync health, and landing on an empty home with a nav to click
-# through is not that. The uid is pinned in ops/grafana/.../rave.json.
-DASHBOARD_URL := http://localhost:3001/d/rave-sync
-
-.PHONY: help dev up down build logs lan ca lint typecheck test metrics clean install
+.PHONY: help dev up down build logs lan ca lint typecheck test clean install
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -66,9 +61,6 @@ typecheck: ## Typecheck every package
 
 test: ## Run every test suite
 	pnpm -r --no-bail test
-
-metrics: ## Open the Grafana dashboard
-	@open $(DASHBOARD_URL) 2>/dev/null || xdg-open $(DASHBOARD_URL) 2>/dev/null || echo "Grafana: $(DASHBOARD_URL)"
 
 clean: ## Tear down containers, volumes and build artifacts
 	$(COMPOSE) down -v --remove-orphans

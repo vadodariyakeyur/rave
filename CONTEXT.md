@@ -149,8 +149,7 @@ its code and shows it, so a person sees what they are about to join.
   the certificate to trust on phones. `make help` lists the rest.
 - Services in [docker-compose.yml](docker-compose.yml): `web` (3000), `realtime` (8080),
   `caddy` (443, the only public entry, proxying `/ws*` and `/healthz` to `realtime` and
-  everything else to `web`), `prometheus` (scrapes `realtime:8080`) and `grafana` (3001,
-  dashboard uid `rave-sync`). Caddy does not proxy `/metrics`, so only Prometheus reaches it.
+  everything else to `web`). `realtime` serves `/metrics`, which Caddy does not proxy.
 - HTTPS is required, not optional: WebRTC and wake locks need a secure context, and Caddy
   issues the certificate from its own internal CA.
 - `make test`, `make lint` and `make typecheck` run across every package (`pnpm -r`).

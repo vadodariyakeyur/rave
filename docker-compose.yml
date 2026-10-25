@@ -20,6 +20,10 @@ services:
       # is a restart of this service rather than a rebuild of the web image.
       # Empty means host candidates only — valid on a single LAN.
       ICE_SERVERS: ${ICE_SERVERS-stun:stun.l.google.com:19302}
+      # Cloudflare TURN, from ./.env (git-ignored). When both are set, short-lived
+      # TURN credentials replace ICE_SERVERS. Empty means not configured.
+      CF_TURN_KEY_ID: ${CF_TURN_KEY_ID:-}
+      CF_TURN_API_TOKEN: ${CF_TURN_API_TOKEN:-}
 
   caddy:
     image: caddy:2.10-alpine
@@ -34,28 +38,6 @@ services:
       - caddy_config:/config
     depends_on: [web, realtime]
 
-  prometheus:
-    image: prom/prometheus:v3.1.0
-    restart: unless-stopped
-    expose: ["9090"]
-    volumes:
-      - ./ops/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-
-  grafana:
-    image: grafana/grafana:11.5.1
-    restart: unless-stopped
-    ports:
-      - "3001:3000"
-    environment:
-      GF_AUTH_ANONYMOUS_ENABLED: "true"
-      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
-      GF_SECURITY_ALLOW_EMBEDDING: "true"
-    volumes:
-      - ./ops/grafana/provisioning:/etc/grafana/provisioning:ro
-      - grafana_data:/var/lib/grafana
-    depends_on: [prometheus]
-
 volumes:
   caddy_data:
   caddy_config:
-  grafana_data:

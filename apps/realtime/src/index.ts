@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { WebSocketServer } from 'ws';
 import { RoomHub } from './hub.ts';
+import { refreshTurn } from './ice.ts';
 import { Metrics } from './metrics.ts';
 import { RoomRegistry } from './rooms.ts';
 import { connectionHandler, log } from './server.ts';
@@ -18,6 +19,8 @@ const rooms = new RoomRegistry();
 const metrics = new Metrics(rooms);
 
 const hub = new RoomHub({ rooms, log });
+
+refreshTurn();
 
 const server = createServer((req, res) => {
   if (req.url === '/metrics') {
